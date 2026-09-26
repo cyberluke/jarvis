@@ -581,6 +581,15 @@ class ChatterboxTTS:
         """Stop current speech immediately"""
         self._should_interrupt.set()
 
+    def clear_queue(self) -> None:
+        """Clear all pending messages in the TTS queue."""
+        with self._lock:
+            while not self._q.empty():
+                try:
+                    self._q.get_nowait()
+                except queue.Empty:
+                    break
+
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
@@ -992,6 +1001,14 @@ class PiperTTS:
     def interrupt(self) -> None:
         """Stop current speech immediately."""
         self._should_interrupt.set()
+
+    def clear_queue(self) -> None:
+        """Clear all pending messages in the TTS queue."""
+        while not self._q.empty():
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
         with self._audio_lock:
             if self._audio_stream is not None:
                 try:

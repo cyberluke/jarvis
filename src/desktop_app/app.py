@@ -1830,6 +1830,10 @@ class JarvisSystemTray:
         self.daemon_thread: Optional[QThread] = None
         self.is_listening = False
         self.is_bundled = getattr(sys, 'frozen', False)
+        #: The daemon's own "Whisper ... loaded on ..." line, kept so the
+        #: settings flow can show the active speech identity separately from
+        #: the saved-but-not-yet-applied selection.
+        self._active_speech_line = ""
         self._ollama_runtime_ownership = (
             ollama_runtime_ownership or OllamaRuntimeOwnership()
         )
@@ -1893,9 +1897,11 @@ class JarvisSystemTray:
         # ``line_received`` (a queued connection) so the chat window is created
         # and the IPC line is parsed on the Qt main thread, never on the
         # worker thread (Qt widgets must be created on the GUI thread).
-        from desktop_app.chat_window import ChatIpcSignals
+        from desktop_app.chat_window import ChatIpcSignals, PresenceIpcSignals
         self._chat_ipc_signals = ChatIpcSignals()
         self._chat_ipc_signals.line_received.connect(self._on_chat_ipc_line)
+        self._presence_ipc_signals = PresenceIpcSignals()
+        self._presence_ipc_signals.line_received.connect(self._on_presence_ipc_line)
 
         # Same bridge for the runtime-status dialog: the snapshot is
         # gathered on a worker thread because it makes a blocking network
@@ -1991,6 +1997,11 @@ class JarvisSystemTray:
         self.chat_action.triggered.connect(self.show_chat)
         self.menu.addAction(self.chat_action)
 
+        # Manual action
+        self.manual_action = QAction("📖 What can I say?")
+        self.manual_action.triggered.connect(self.show_manual)
+        self.menu.addAction(self.manual_action)
+
         # Face window action
         self.face_action = QAction("🍞 Show Toaster")
         self.face_action.triggered.connect(self.show_face_window)
@@ -2059,6 +2070,12 @@ class JarvisSystemTray:
         self.menu.addAction(self.quit_action)
 
         self.tray_icon.setContextMenu(self.menu)
+
+    def show_manual(self) -> None:
+        """Open the 'What can I say?' manual dialog."""
+        from desktop_app.what_can_i_say_dialog import WhatCanISayDialog
+        dialog = WhatCanISayDialog(self)
+        dialog.exec()
 
     def reset_talkie_toaster(self) -> None:
         """Demo-mode reset: clear temporary conversation state only.
@@ -2215,6 +2232,31 @@ class JarvisSystemTray:
             if reply == QMessageBox.StandardButton.Yes:
                 self.stop_daemon()
                 self.start_daemon()
+            else:
+                # Saved-but-not-restarted is its own visible state: the saved
+                # selection is pending, the active runtime keeps its identity.
+                try:
+                    from jarvis.config import load_config
+                    saved = load_config()
+                    active = self._active_speech_line or "unknown (no loaded-model line yet)"
+                    debug_log(
+                        "speech settings pending restart: "
+                        f"saved_backend={saved.get('whisper_backend', 'auto')}, "
+                        f"saved_model={saved.get('whisper_model', '')}, "
+                        f"saved_precision={saved.get('whisper_openvino_precision', 'int8')}, "
+                        f"active={active}",
+                        "desktop",
+                    )
+                    print(
+                        "  💾 Saved selection pending restart — "
+                        f"saved: {saved.get('whisper_backend', 'auto')}/"
+                        f"{saved.get('whisper_model', '')}/"
+                        f"{saved.get('whisper_openvino_precision', 'int8')}; "
+                        f"active: {active}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    debug_log(f"pending-restart status failed: {exc}", "desktop")
 
     def collect_runtime_status(self) -> RuntimeStatusSnapshot:
         """Collect current runtime state for the tray diagnostics dialog."""
@@ -2406,12 +2448,14 @@ class JarvisSystemTray:
         """Wire dictation engine's result callback to the history window signal.
 
         Called once after daemon startup so live entries appear immediately.
-        Retries up to *retries_left* times (5 s apart) if the engine isn't ready.
-        The daemon publishes the engine only after the MCP discovery and the
-        Whisper load, which together exceed a minute on cold starts, so the
-        budget covers roughly two minutes of polling.
+        Skips entirely when dictation is disabled — otherwise the retry loop
+        polls for two minutes and logs a spurious "never became available".
         """
         try:
+            from jarvis.config import load_config
+            if not bool(load_config().get("dictation_enabled", False)):
+                debug_log("dictation disabled; history wiring skipped", "desktop")
+                return
             from jarvis.daemon import get_dictation_engine
             engine = get_dictation_engine()
             if engine is None:
@@ -2743,17 +2787,37 @@ class JarvisSystemTray:
                 # Debug: log IPC events specifically
                 if "__DIARY__:" in line:
                     debug_log(f"log reader: IPC event read: {line[:80]}...", "desktop")
+                # Remember the active speech identity for the pending-restart
+                # status: the daemon's own "Whisper ... loaded on ..." line.
+                if "🎤 Whisper" in line and "loaded on" in line:
+                    self._active_speech_line = line.strip()
                 # Route chat events to the main thread via the IPC signal
                 # bridge. The line is parsed and the chat window is created
                 # on the Qt main thread, never here on the log reader thread
                 # (Qt widgets must be created on the GUI thread).
+                from jarvis.daemon import CHAT_IPC_PREFIX, PRESENCE_IPC_PREFIX
                 if line.startswith(CHAT_IPC_PREFIX):
                     self._chat_ipc_signals.line_received.emit(line)
+                elif line.startswith(PRESENCE_IPC_PREFIX):
+                    self._presence_ipc_signals.line_received.emit(line)
                 if _should_emit_as_log(line):
                     self.log_signals.new_log.emit(line)
         except Exception as e:
             debug_log(f"log reader error: {e}", "desktop")
             self.log_signals.new_log.emit(f"⚠️ Log reader error: {e}\n")
+
+    def _on_presence_ipc_line(self, line: str) -> None:
+        """Handle a ``__PRESENCE__:`` event line on the Qt main thread."""
+        import json
+        from jarvis.daemon import PRESENCE_IPC_PREFIX
+        try:
+            payload = json.loads(line[len(PRESENCE_IPC_PREFIX):])
+            mode = payload.get("mode")
+            label = payload.get("label")
+            if mode and label and self.face_window:
+                self.face_window.update_presence_mode(mode, label)
+        except Exception:
+            debug_log("malformed presence IPC line ignored", "desktop")
 
     def _on_chat_ipc_line(self, line: str) -> None:
         """Handle a ``__CHAT__:`` event line on the Qt main thread.
@@ -3245,14 +3309,23 @@ class SetupCheckWorker(KeepAliveWorker):
     check_done = pyqtSignal(bool)  # Emits True if setup wizard needed
 
     def run(self):
+        import threading
+        _t = threading.current_thread().name
+        print(f"  [setup-check:{_t}] entering run()", flush=True)
         try:
             # Lazy import: app.py keeps setup_wizard loading deferred past
             # crash-logging setup, so resolve it from the worker thread.
             from desktop_app.setup_wizard import should_show_setup_wizard
+            print(f"  [setup-check:{_t}] imported should_show_setup_wizard",
+                  flush=True)
             result = should_show_setup_wizard()
+            print(f"  [setup-check:{_t}] should_show_setup_wizard -> {result}",
+                  flush=True)
             self.check_done.emit(result)
         except Exception as e:
-            print(f"  ❌ Setup check failed: {e}", flush=True)
+            print(f"  [setup-check:{_t}] FAILED: {type(e).__name__}: {e}",
+                  flush=True)
+            traceback.print_exc()
             # On error, show wizard to let user fix issues
             self.check_done.emit(True)
 
@@ -3403,6 +3476,34 @@ def main() -> int:
         if app is None:
             app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
+
+        # Pre-warm frozen-bundle module imports on the MAIN thread, before any
+        # worker thread, modal dialog, or signal bridge runs. PyInstaller's
+        # archive extractor (pyimod01_archive.extract) access-violates when a
+        # module is first imported while a modal dialog holds the input queue
+        # or off the GUI thread. Importing them here, once, up front makes the
+        # later lazy imports a no-op (already in sys.modules) and removes the
+        # whole crash class (see jarvis_desktop_crash.log "Windows fatal
+        # exception: access violation ... pyimod01_archive.extract").
+        if getattr(sys, 'frozen', False):
+            _stage("Pre-warming bundled modules...")
+            # Only the lightweight GUI modules are pre-warmed. Native-heavy
+            # modules (dictation_engine/PortAudio, faster_whisper/av) are NOT
+            # imported here — the wizard already avoids importing them during
+            # UI construction (see setup_wizard fixes), and pulling natives at
+            # startup would slow boot for everyone.
+            for _m in (
+                "desktop_app.chat_window",
+                "desktop_app.settings_window",
+                "desktop_app.face_widget",
+                "desktop_app.memory_viewer",
+                "desktop_app.dictation_history",
+            ):
+                try:
+                    __import__(_m)
+                except Exception as _prewarm_exc:
+                    print(f"  [prewarm] {_m}: {_prewarm_exc}", flush=True)
+            _stage("Bundled modules pre-warmed")
 
         # Show splash screen during startup
         from desktop_app.splash_screen import SplashScreen
@@ -3749,10 +3850,16 @@ def main() -> int:
                         app.processEvents()
                 # Summed CUDA demand of the chat model *and* Whisper, which are
                 # resident at the same time, plus the free headroom to keep.
+                # On NPU the Whisper rows stay out of the CUDA budget (shared
+                # system memory), so only the chat model is subtracted there.
                 _plan = estimate_cuda_vram_plan(
                     str(_chat_model or ""),
                     str(getattr(cfg, "whisper_model", "") or ""),
                     str(getattr(cfg, "whisper_compute_type", "int8") or "int8"),
+                    whisper_on_npu=(
+                        str(getattr(cfg, "whisper_backend", "") or "").lower() == "openvino"
+                        and str(getattr(cfg, "whisper_openvino_device", "") or "").upper() == "NPU"
+                    ),
                 )
                 _budget_text = format_cuda_vram_budget(_plan)
                 if _budget_text:

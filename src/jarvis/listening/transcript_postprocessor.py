@@ -169,6 +169,18 @@ def _identity_fold(value: str) -> str:
     )
 
 
+def _speech_fold(value: str) -> str:
+    """Homophone-tolerant fold for speech-transcript candidate ranking.
+
+    Czech (and Slovak) ``i``/``y``/``í``/``ý`` are homophonous, and Whisper's
+    diacritic slips almost always pick the wrong one of that set. For
+    tie-breaking among equal-distance candidates we fold them to one letter so
+    a diacritic-only correction (počas-y -> počas-í) beats a consonant swap.
+    """
+    folded = _identity_fold(value)
+    return folded.translate(str.maketrans({"y": "i"}))
+
+
 def _match_case(token: str, candidate: str) -> str:
     """Apply the token's casing shape to a candidate."""
     if token.islower():
@@ -367,13 +379,31 @@ def correct_transcript(
         ranked.sort(key=lambda item: (item[0], item[1]))
 
         best_distance = ranked[0][0]
-        best = {candidate for distance, _order, candidate in ranked if distance == best_distance}
         max_allowed = 2 if len(token) >= allowed_distance_by_len else 1
-        if len(best) != 1 or best_distance > max_allowed:
+        if best_distance > max_allowed:
             pieces.append(token)
             continue
 
-        replacement = _match_case(token, next(iter(best)))
+        # Ambiguity guard (the safe default): several candidates tying at the
+        # best edit distance with no clearer signal means "keep the original"
+        # — a wrong guess is worse than a kept typo (helo must stay helo, not
+        # become help/hell/hero).
+        #
+        # The ONE exception: a single tied candidate that differs from the
+        # token only in letter-form/diacritics on the same phonetic skeleton
+        # (počas-y -> počas-í; the i/y/í/ý homophone set). That is the minimal
+        # change speech actually makes, so it wins over the ambiguity guard.
+        tied = [c for d, _o, c in ranked if d == best_distance]
+        if len(tied) != 1:
+            token_skel = _speech_fold(token)
+            skel_matches = [c for c in tied if _speech_fold(c) == token_skel]
+            if len(skel_matches) != 1:
+                pieces.append(token)
+                continue
+            best_candidate = skel_matches[0]
+        else:
+            best_candidate = tied[0]
+        replacement = _match_case(token, best_candidate)
         if not replacement or replacement == token:
             pieces.append(token)
             continue

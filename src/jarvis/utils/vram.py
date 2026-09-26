@@ -471,6 +471,7 @@ def estimate_cuda_vram_plan(
     chat_model: str,
     whisper_model: str,
     compute_type: str = "int8",
+    whisper_on_npu: bool = False,
 ) -> Dict[str, Any]:
     """Sum the resident VRAM demand of the chat LLM and Whisper model.
 
@@ -479,6 +480,10 @@ def estimate_cuda_vram_plan(
     figure (requirement + margin) to leave unallocated, and the resulting
     ``headroom_mb`` against ``total_mb`` plus a ``fits`` flag. Unknown inputs
     stay ``None`` so the caller can print whatever *is* known.
+
+    With ``whisper_on_npu`` the Whisper rows are zeroed for the CUDA budget:
+    the NPU works on shared system memory, not on the discrete GPU pool, so
+    the old CUDA Whisper estimate must not be subtracted from it.
     """
     plan: Dict[str, Any] = {
         "total_mb": detect_total_vram_mb(),
@@ -516,14 +521,20 @@ def estimate_cuda_vram_plan(
                 f"chat weights measured from GGUF file; +{runtime} MB KV/runtime"
             )
 
-    w_weights = whisper_weights_mb(whisper_model, compute_type)
-    if w_weights is not None:
-        plan["whisper_weights_mb"] = w_weights
-        plan["whisper_runtime_mb"] = _WHISPER_RUNTIME_MB
-        plan["whisper_total_mb"] = w_weights + _WHISPER_RUNTIME_MB
+    if whisper_on_npu:
         plan["notes"].append(
-            f"whisper {compute_type} weights + {_WHISPER_RUNTIME_MB} MB CT2 runtime"
+            "whisper on NPU: shared system memory, not CUDA VRAM "
+            "(artifact + ~128 MB runtime on the system side)"
         )
+    else:
+        w_weights = whisper_weights_mb(whisper_model, compute_type)
+        if w_weights is not None:
+            plan["whisper_weights_mb"] = w_weights
+            plan["whisper_runtime_mb"] = _WHISPER_RUNTIME_MB
+            plan["whisper_total_mb"] = w_weights + _WHISPER_RUNTIME_MB
+            plan["notes"].append(
+                f"whisper {compute_type} weights + {_WHISPER_RUNTIME_MB} MB CT2 runtime"
+            )
 
     required = int(plan["llm_total_mb"]) + int(plan["whisper_total_mb"])
     plan["required_mb"] = required

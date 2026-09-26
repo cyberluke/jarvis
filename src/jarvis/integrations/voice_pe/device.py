@@ -1246,13 +1246,15 @@ class VoicePEDevice:
         token: Any = None,
         *,
         start_conversation: bool = True,
+        language: Optional[str] = None,
     ) -> None:
         """Deliver a late reply after its Voice Assistant run has expired."""
         if not reply or self._client is None:
             return
         self._submit(
             self._announce_reply_async(
-                reply, token, start_conversation=start_conversation
+                reply, token, start_conversation=start_conversation,
+                language=language,
             )
         )
 
@@ -1652,6 +1654,7 @@ class VoicePEDevice:
         token: Any = None,
         *,
         start_conversation: bool = True,
+        language: Optional[str] = None,
     ) -> None:
         """Out-of-run TTS fallback tied to the same physical satellite.
 
@@ -1666,7 +1669,7 @@ class VoicePEDevice:
         if self.holds_session():
             debug_log("late Voice PE reply suppressed: newer run is active", "voice")
             return
-        media_id = await self.tts_media_url(reply)
+        media_id = await self.tts_media_url(reply, language=language)
         if not media_id:
             self.last_error = "tts_announcement: empty media URL"
             return
@@ -1857,12 +1860,18 @@ class VoicePEDevice:
         info["last_finished_generation"] = int(self.last_finished_generation)
         return info
 
-    async def tts_media_url(self, text: str) -> str:
-        """Public synthesis helper: LAN URL of ``text``, ``""`` when unavailable."""
+    async def tts_media_url(self, text: str, language: Optional[str] = None) -> str:
+        """Public synthesis helper: LAN URL of ``text``, ``""`` when unavailable.
+
+        ``language`` selects the Piper voice explicitly. When None it falls back
+        to the turn's STT-detected language — which is right for a user reply but
+        wrong for an app-generated proactive remark (a Czech message would be
+        spoken in the last STT language, e.g. Vietnamese on a misdetection).
+        """
+        lang = language if isinstance(language, str) and language.strip() \
+            else self._detected_language()
         try:
-            pcm = await synthesize_pcm_async(
-                self._tts, text, self._detected_language()
-            ) or b""
+            pcm = await synthesize_pcm_async(self._tts, text, lang) or b""
         except Exception as err:
             self.last_error = f"tts: {err}"
             return ""
@@ -1984,6 +1993,78 @@ class VoicePEDevice:
             asyncio.run_coroutine_threadsafe(coro, loop)
         except Exception:
             coro.close()
+
+    def set_listening_mode(self, continuous: bool) -> None:
+        """Switch the Voice PE product mode live (thread-safe, any thread).
+
+        ``continuous=False`` -> push-to-talk: wake words are deactivated
+        (``active_wake_words=[]``) so the first session opens on the centre
+        button. ``continuous=True`` -> continuous: wake words stay active and
+        ``continued_conversation`` reopens the mic after each reply.
+
+        The config flag is flipped and the device is re-synced on the voice_pe
+        loop thread; the mode is also persisted so a reconnect keeps it.
+        """
+        self.config.disable_wake_words = not continuous
+        self.config.continued_conversation = bool(continuous)
+        self.wake_words_disabled = not continuous
+        # Centre-button commit: the single press is consumed on-device, so the
+        # quick "I'm done talking, process now" gesture in continuous mode is
+        # the double press. In continuous mode map double_press ->
+        # commit_utterance (flush the collected speech immediately); in
+        # push-to-talk it keeps the overlay default. A user-set custom
+        # double_press mapping is left untouched.
+        current_double = self.config.button_actions.get("double_press")
+        if continuous:
+            if current_double in (None, "", "toggle_overlay"):
+                self.config.button_actions["double_press"] = "commit_utterance"
+        else:
+            if current_double == "commit_utterance":
+                self.config.button_actions["double_press"] = "toggle_overlay"
+        self._mark_event(
+            "continuous" if continuous else "push_to_talk")
+        debug_log(
+            f"voice_pe mode switch: continuous={int(continuous)} "
+            f"device={self.identity.get('mac_address')}", "voice")
+        self._submit(self._apply_listening_mode(continuous))
+
+    async def _apply_listening_mode(self, continuous: bool) -> None:
+        """Re-write the voice-assistant wake-word configuration on the live
+        connection (same call the connect-time sync uses)."""
+        client = self._client
+        if client is None or not getattr(client, "is_connected", False):
+            return
+        if not self.capabilities.voice_assistant:
+            return
+        try:
+            if continuous:
+                # Re-enable the stock wake words (firmware default) so the
+                # mic follows them again.
+                try:
+                    cfg = await client.get_voice_assistant_configuration(
+                        VA_CONFIG_TIMEOUT_S)
+                    available = list(
+                        getattr(cfg, "available_wake_words", None) or [])
+                    first = available[0] if available else None
+                    wake = getattr(first, "wake_word", None) if first else None
+                    await client.set_voice_assistant_configuration(
+                        [wake] if wake else ["okay_nabu"])
+                except Exception:
+                    await client.set_voice_assistant_configuration(
+                        ["okay_nabu"])
+                self.wake_words_disabled = False
+            else:
+                await client.set_voice_assistant_configuration([])
+                self.wake_words_disabled = True
+            readback = await client.get_voice_assistant_configuration(
+                VA_CONFIG_TIMEOUT_S)
+            active = list(getattr(readback, "active_wake_words", None) or [])
+            self.wake_words_disabled = not active
+            self.metrics["wake_words_active"] = len(active)
+            self._mark_event("mode_synced")
+        except Exception as err:
+            self.last_error = f"mode: {err}"
+            debug_log(f"voice_pe mode sync failed: {err}", "voice")
 
     def _mark_event(self, name: str) -> None:
         self.last_event_at = _now_iso()

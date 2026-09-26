@@ -59,7 +59,7 @@ class TestWhisperComputeTypeFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
 
                             # Run will attempt to load model then open audio stream
                             listener.run()
@@ -96,7 +96,7 @@ class TestWhisperComputeTypeFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have tried int8 first, then float16
@@ -134,7 +134,7 @@ class TestWhisperComputeTypeFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have tried int8, float16, then float32
@@ -167,7 +167,7 @@ class TestWhisperComputeTypeFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have only tried once - no fallback for model not found errors
@@ -196,7 +196,7 @@ class TestWhisperComputeTypeFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have tried all configs: 3 compute types x 2 devices (auto + cpu fallback)
@@ -230,7 +230,7 @@ class TestWhisperComputeTypeFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have tried float16, then float32 (no duplicate float16)
@@ -262,7 +262,7 @@ class TestWhisperComputeTypeFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have tried float32 on auto, then cpu fallback
@@ -401,7 +401,7 @@ class TestLargeV3TurboFallback:
                                 from jarvis.listening.listener import VoiceListener
 
                                 mock_cfg = _create_mock_config(whisper_model="large-v3-turbo")
-                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
                                 listener.run()
 
                                 # Should load large-v3 instead of large-v3-turbo
@@ -428,7 +428,7 @@ class TestLargeV3TurboFallback:
                                 from jarvis.listening.listener import VoiceListener
 
                                 mock_cfg = _create_mock_config(whisper_model="large-v3-turbo")
-                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
                                 listener.run()
 
                                 # Should keep large-v3-turbo
@@ -460,7 +460,7 @@ class TestRepetitiveHallucinationDetection:
                         mock_tts = MagicMock()
                         mock_dialogue_memory = MagicMock()
 
-                        return VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                        return VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
 
     def test_detects_repeated_single_word_dont(self):
         """Detects 'don't don't don't...' repetition pattern."""
@@ -576,7 +576,7 @@ class TestCpuOptimisations:
                                 from jarvis.listening.listener import VoiceListener
 
                                 mock_cfg = _create_mock_config(whisper_device="cpu")
-                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
                                 listener.run()
 
                                 assert mock_class.call_args[1]["cpu_threads"] == 8
@@ -598,7 +598,7 @@ class TestCpuOptimisations:
                                 from jarvis.listening.listener import VoiceListener
 
                                 mock_cfg = _create_mock_config(whisper_device="auto")
-                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
                                 listener.run()
 
                                 assert mock_class.call_args[1]["cpu_threads"] == 12
@@ -620,7 +620,7 @@ class TestCpuOptimisations:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_cfg = _create_mock_config()
-                            listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                            listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
                             listener.run()
 
                             assert listener._whisper_device == "cpu"
@@ -645,7 +645,7 @@ class TestCpuOptimisations:
                             from jarvis.listening.listener import VoiceListener
 
                             mock_cfg = _create_mock_config()
-                            listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                            listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
                             listener.run()
 
                             assert listener._whisper_device == "cpu"
@@ -689,7 +689,7 @@ class TestCpuOptimisations:
                     mock_cfg.wake_word = "toustovač"
                     mock_cfg.wake_aliases = ["toustovači", "toastovač", "toastovači"]
 
-                    listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                    listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
                     listener.model = mock_whisper_model
                     listener._whisper_backend = "faster-whisper"
                     listener._whisper_device = whisper_device
@@ -741,7 +741,9 @@ class TestCpuOptimisations:
         assert call_kwargs["without_timestamps"] is True
         assert call_kwargs["condition_on_previous_text"] is False
         assert call_kwargs["vad_filter"] is False
-        assert call_kwargs["suppress_nospeech_text"] is True
+        # faster-whisper folds the MLX ``suppress_nospeech_text`` flag into
+        # ``suppress_tokens=[-1]`` (the non-speech marker set).
+        assert call_kwargs["suppress_tokens"] == [-1]
 
     def test_two_line_log_and_corrected_text_reaches_downstream(self, capsys):
         """`📝 Heard:` keeps Whisper's text, `✏️ Hunspell fixed:` follows, and the
@@ -834,7 +836,7 @@ class TestRepetitiveHallucinationDetectionExtended:
                         mock_tts = MagicMock()
                         mock_dialogue_memory = MagicMock()
 
-                        return VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                        return VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
 
     def test_accepts_short_repetition(self):
         """Doesn't flag short character strings even with repetition."""
@@ -945,7 +947,7 @@ class TestCrossPlatformDeviceLogging:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             captured = capsys.readouterr()
@@ -981,7 +983,7 @@ class TestCrossPlatformDeviceLogging:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             captured = capsys.readouterr()
@@ -1028,7 +1030,7 @@ class TestCrossPlatformAudioHealthWarning:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
 
                             # Make _audio_q.get raise Empty then stop the loop
                             get_calls = [0]
@@ -1180,7 +1182,7 @@ class TestSampleRateFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
 
                             # Make the run loop exit immediately
                             get_calls = [0]
@@ -1232,7 +1234,7 @@ class TestSampleRateFallback:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should only have tried once — no fallback
@@ -1277,7 +1279,7 @@ class TestCorruptedWhisperCacheRecovery:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have called WhisperModel twice: first corrupted, then retry
@@ -1313,7 +1315,7 @@ class TestCorruptedWhisperCacheRecovery:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # The loop tried fallback configs (not just config 1's retry)
@@ -1360,7 +1362,7 @@ class TestCorruptedWhisperCacheRecovery:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # The entire models-- directory should have been deleted (including blobs)
@@ -1387,7 +1389,7 @@ class TestCorruptedWhisperCacheRecovery:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # The loop tried fallback configs (not just the first one)
@@ -1425,7 +1427,7 @@ class TestCorruptedWhisperCacheRecovery:
                                 mock_tts = MagicMock()
                                 mock_dialogue_memory = MagicMock()
 
-                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                                 listener.run()
 
                                 # The loop tried fallback configs (not just the first one)
@@ -1458,7 +1460,7 @@ class TestCorruptedWhisperCacheRecovery:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # The loop tried fallback configs (not just the first one)
@@ -1503,7 +1505,7 @@ class TestCorruptedWhisperCacheRecovery:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Call 1 (config 1 initial), call 2 (config 1 retry), call 3 (config 2, succeeds)
@@ -1546,7 +1548,7 @@ class TestWhisperRateLimitRetry:
                                 mock_tts = MagicMock()
                                 mock_dialogue_memory = MagicMock()
 
-                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                                 listener.run()
 
                                 assert mock_class.call_count == 2
@@ -1574,7 +1576,7 @@ class TestWhisperRateLimitRetry:
                                 mock_tts = MagicMock()
                                 mock_dialogue_memory = MagicMock()
 
-                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                                 listener.run()
 
                                 # Should have retried multiple times then given up
@@ -1620,7 +1622,7 @@ class TestWhisperRateLimitRetry:
                                 mock_tts = MagicMock()
                                 mock_dialogue_memory = MagicMock()
 
-                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                                listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                                 listener.run()
 
                                 assert mock_class.call_count == 2
@@ -1647,7 +1649,7 @@ class TestWhisperRateLimitRetry:
                             mock_tts = MagicMock()
                             mock_dialogue_memory = MagicMock()
 
-                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+                            listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
                             listener.run()
 
                             # Should have only tried once — no retry
@@ -1686,7 +1688,7 @@ def _make_listener_for_warmup(
                 mock_cfg.wake_word = "jarvis"
                 mock_cfg.wake_aliases = []
 
-                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                listener = VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
 
                 if judge_model is not None:
                     listener._intent_judge = IntentJudge(
@@ -1934,7 +1936,7 @@ class TestWhisperWarmup:
                             mock_cfg.ollama_base_url = ""
                             mock_cfg.fast_model = ""
                             listener = VoiceListener(
-                                MagicMock(), mock_cfg, MagicMock(), MagicMock()
+                                MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock()
                             )
                             listener.run()
 
@@ -1968,7 +1970,7 @@ class TestFilterNoisySegmentsNoSpeechProb:
                         mock_cfg.tune_enabled = False
                         mock_cfg.whisper_min_confidence = 0.3
                         mock_cfg.whisper_no_speech_threshold = 0.5
-                        return VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock())
+                        return VoiceListener(MagicMock(), mock_cfg, MagicMock(), MagicMock(), MagicMock())
 
     def _make_segment(self, text, avg_logprob=None, no_speech_prob=None):
         from types import SimpleNamespace

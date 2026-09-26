@@ -28,6 +28,18 @@ from jarvis.utils.vram import (
 )
 
 
+def _trace(msg: str) -> None:
+    """Crash-log trace for wizard construction (survives into the frozen
+    bundle's stderr -> crash log). Tags the thread so threading faults are
+    attributable."""
+    import threading as _t
+    try:
+        print(f"[wizard-trace:{_t.current_thread().name}] {msg}",
+              file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 def is_apple_silicon() -> bool:
     """Check if running on Apple Silicon Mac."""
     return sys.platform == "darwin" and platform.machine() == "arm64"
@@ -501,19 +513,33 @@ class SetupWizard(QWizard):
         # Apply dark theme
         self._apply_theme()
 
-        # Add pages and store their IDs
+        # Add pages and store their IDs (traced so a crash inside a page
+        # constructor names the page in the frozen crash log).
+        _trace("constructing WelcomePage")
         self.welcome_page = WelcomePage(self)
+        _trace("constructing ProviderChoicePage")
         self.provider_choice_page = ProviderChoicePage(self)
+        _trace("constructing OpenAICompatiblePage")
         self.openai_compat_page = OpenAICompatiblePage(self)
+        _trace("constructing OllamaInstallPage")
         self.ollama_install_page = OllamaInstallPage(self)
+        _trace("constructing OllamaServerPage")
         self.ollama_server_page = OllamaServerPage(self)
+        _trace("constructing ModelsPage")
         self.models_page = ModelsPage(self)
+        _trace("constructing WhisperSetupPage")
         self.mlx_whisper_page = WhisperSetupPage(self)
+        _trace("constructing DictationPage")
         self.dictation_page = DictationPage(self)
+        _trace("constructing MCPPage")
         self.mcp_page = MCPPage(self)
+        _trace("constructing SearchProvidersPage")
         self.search_providers_page = SearchProvidersPage(self)
+        _trace("constructing LocationPage")
         self.location_page = LocationPage(self)
+        _trace("constructing CompletePage")
         self.complete_page = CompletePage(self)
+        _trace("all pages constructed")
 
         self.welcome_page_id = self.addPage(self.welcome_page)
         self.mlx_whisper_page_id = self.addPage(self.mlx_whisper_page)
@@ -2423,11 +2449,18 @@ class ModelsPage(QWizardPage):
             w.setMinimumHeight(height)
             w.resize(w.width(), height)
 def _is_faster_whisper_turbo_supported() -> bool:
-    """Check if the installed faster-whisper supports the large-v3-turbo model."""
+    """Check if the installed faster-whisper supports the large-v3-turbo model.
+
+    Reads the installed package metadata instead of importing
+    ``faster_whisper``: the import pulls in ``av`` (PyAV), whose native
+    extension access-violates in the frozen bundle when loaded off the main
+    UI thread (the wizard builds its model list during init). The version
+    check never needs the native library.
+    """
     try:
-        import faster_whisper
+        from importlib.metadata import version as _pkg_version
         from packaging.version import Version
-        return Version(faster_whisper.__version__) >= Version("1.1.0")
+        return Version(_pkg_version("faster-whisper")) >= Version("1.1.0")
     except Exception:
         return False
 
@@ -2443,7 +2476,20 @@ class WhisperSetupPage(QWizardPage):
         ("base", "Base", "~140MB", "~1GB VRAM", "Fast, decent accuracy"),
         ("small", "Small", "~465MB", "~2GB VRAM", "Good balance of speed and accuracy"),
         ("medium", "Medium", "~1.5GB", "~5GB VRAM", "Best balance (Recommended)"),
+        ("large-v3", "Large V3", "~1.5GB", "~6GB VRAM", "Best accuracy (full large-v3)"),
         ("large-v3-turbo", "Large V3 Turbo", "~1.5GB", "~6GB VRAM", "Best accuracy, needs more VRAM"),
+    ]
+
+    # OpenVINO IR catalog (multilingual only): sizes are the real artifact
+    # totals of the pinned INT8 exports; turbo is always available there,
+    # independent of the old faster-whisper version gate.
+    WHISPER_MODEL_OPTIONS_OV = [
+        ("tiny", "Tiny", "~47MB", "NPU", "Fastest, lower accuracy"),
+        ("base", "Base", "~81MB", "NPU", "Fast, decent accuracy"),
+        ("small", "Small", "~245MB", "NPU", "Good balance of speed and accuracy"),
+        ("medium", "Medium", "~748MB", "NPU", "Best balance (Recommended)"),
+        ("large-v3", "Large V3", "~1.5GB", "NPU", "Best accuracy (full large-v3)"),
+        ("large-v3-turbo", "Large V3 Turbo", "~790MB", "NPU", "Best accuracy, recommended for NPU"),
     ]
 
     # English-only models - optimised for English, slightly better accuracy
@@ -2461,6 +2507,7 @@ class WhisperSetupPage(QWizardPage):
         "base": 1024,
         "small": 2048,
         "medium": 5120,
+        "large-v3": 6144,
         "large-v3-turbo": 6144,
     }
 
@@ -2476,6 +2523,7 @@ class WhisperSetupPage(QWizardPage):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        _trace("WhisperSetupPage.__init__ start")
         self.setTitle("")
         self._is_apple_silicon = is_apple_silicon()
         self._is_bundled = getattr(sys, 'frozen', False)
@@ -2513,6 +2561,82 @@ class WhisperSetupPage(QWizardPage):
         subtitle.setObjectName("subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
+
+        # Backend selection card: explicit backend + OpenVINO-specific knobs
+        backend_card = QFrame()
+        backend_card.setObjectName("card")
+        backend_layout = QVBoxLayout(backend_card)
+        backend_layout.setContentsMargins(16, 12, 16, 12)
+        backend_layout.setSpacing(6)
+
+        backend_title = QLabel("🧩 Speech Backend")
+        backend_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #fbbf24; background: transparent;")
+        backend_layout.addWidget(backend_title)
+
+        self._backend_combo = QComboBox()
+        self._backend_combo.setMinimumHeight(36)
+        self._backend_combo.addItem("Auto (MLX on Apple Silicon, else faster-whisper)", "auto")
+        self._backend_combo.addItem("Faster Whisper", "faster-whisper")
+        self._backend_combo.addItem("MLX (Apple Silicon)", "mlx")
+        self._backend_combo.addItem("OpenVINO / Intel NPU", "openvino")
+        self._backend_combo.currentIndexChanged.connect(self._on_backend_changed)
+        backend_layout.addWidget(self._backend_combo)
+
+        self._precision_label = QLabel("Artifact precision")
+        self._precision_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self._precision_combo = QComboBox()
+        self._precision_combo.setMinimumHeight(36)
+        self._precision_combo.addItem("OpenVINO INT8 (recommended)", "int8")
+        self._precision_combo.addItem("OpenVINO FP16", "fp16")
+        backend_layout.addWidget(self._precision_label)
+        backend_layout.addWidget(self._precision_combo)
+
+        self._runtime_label = QLabel("Runtime source")
+        self._runtime_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self._runtime_combo = QComboBox()
+        self._runtime_combo.setMinimumHeight(36)
+        self._runtime_combo.addItem("Installed tree (setupvars layout)", "installed")
+        self._runtime_combo.addItem("Owner wheel (cp313)", "wheel")
+        backend_layout.addWidget(self._runtime_label)
+        backend_layout.addWidget(self._runtime_combo)
+
+        self._root_label = QLabel("Runtime root (optional, empty = installer discovery)")
+        self._root_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self._root_input = QLineEdit()
+        self._root_input.setMinimumHeight(36)
+        self._root_input.setPlaceholderText(r"C:\Program Files\Intel")
+        backend_layout.addWidget(self._root_label)
+        backend_layout.addWidget(self._root_input)
+
+        self._python_label = QLabel("Worker interpreter (optional, CPython 3.13 x64)")
+        self._python_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        self._python_input = QLineEdit()
+        self._python_input.setMinimumHeight(36)
+        self._python_input.setPlaceholderText(r"C:\Python313\python.exe")
+        backend_layout.addWidget(self._python_label)
+        backend_layout.addWidget(self._python_input)
+
+        # OpenVINO preflight statuses (lightweight: registry, files, probe)
+        self.ov_runtime_status = self._create_status_row("🧩 OpenVINO runtime", "Checking...")
+        self.ov_companion_status = self._create_status_row("📦 GenAI companion", "Checking...")
+        self.ov_npu_status = self._create_status_row("🖥️ NPU device", "Checking...")
+        self.ov_model_status = self._create_status_row("📁 Model cache", "Checking...")
+        self.ov_pipeline_status = self._create_status_row("⚙️ Pipeline", "Pending (starts with the daemon)")
+        for _row in (
+            self.ov_runtime_status,
+            self.ov_companion_status,
+            self.ov_npu_status,
+            self.ov_model_status,
+            self.ov_pipeline_status,
+        ):
+            backend_layout.addWidget(_row)
+
+        self._ov_download_btn = QPushButton("⬇️ Download selected model")
+        self._ov_download_btn.setFixedHeight(32)
+        self._ov_download_btn.clicked.connect(self._download_ov_model)
+        backend_layout.addWidget(self._ov_download_btn)
+
+        layout.addWidget(backend_card)
 
         # Language selection card
         lang_card = QFrame()
@@ -2740,11 +2864,16 @@ class WhisperSetupPage(QWizardPage):
         self._worker: Optional[CommandWorker] = None
 
     def _get_current_model_options(self) -> list:
-        """Get the model options list based on current language mode.
+        """Get the model options list based on the selected backend/language.
 
-        Filters out large-v3-turbo on non-Apple-Silicon platforms when the
-        installed faster-whisper version does not support it.
+        The OpenVINO catalog is multilingual-only and always includes
+        ``large-v3`` and ``large-v3-turbo`` (the IR exports ship with the
+        selected companion, independent of the old faster-whisper version).
+        The faster-whisper turbo filter applies only to that backend.
         """
+        backend = self._backend_combo.currentData()
+        if backend == "openvino":
+            return self.WHISPER_MODEL_OPTIONS_OV
         options = self.WHISPER_MODEL_OPTIONS_EN if self._is_english_only else self.WHISPER_MODEL_OPTIONS
         # Apple Silicon uses MLX Whisper which always supports turbo
         if self._is_apple_silicon:
@@ -2753,6 +2882,26 @@ class WhisperSetupPage(QWizardPage):
         if not _is_faster_whisper_turbo_supported():
             options = [opt for opt in options if opt[0] != "large-v3-turbo"]
         return options
+
+    def _on_backend_changed(self, *_args) -> None:
+        """Show OpenVINO-specific controls only for the OpenVINO backend."""
+        is_ov = self._backend_combo.currentData() == "openvino"
+        for widget in (
+            self._precision_label, self._precision_combo,
+            self._runtime_label, self._runtime_combo,
+            self._root_label, self._root_input,
+            self._python_label, self._python_input,
+        ):
+            widget.setVisible(is_ov)
+        for row in (
+            self.ov_runtime_status, self.ov_companion_status,
+            self.ov_npu_status, self.ov_model_status, self.ov_pipeline_status,
+            self._ov_download_btn,
+        ):
+            row.setVisible(is_ov)
+        if is_ov:
+            self._refresh_openvino_preflight()
+        self._rebuild_slider_ui()
 
     def _on_language_changed(self, is_english: bool):
         """Handle language mode change."""
@@ -2914,28 +3063,193 @@ class WhisperSetupPage(QWizardPage):
             else:
                 status_label.setStyleSheet("font-size: 12px; color: #fbbf24; background: transparent;")
 
-    def _save_whisper_model_to_config(self):
-        """Save the selected whisper model to config file."""
+    def _save_whisper_model_to_config(self) -> bool:
+        """Save the complete backend/model/precision/language/runtime choice.
+
+        Only keys that differ from the schema defaults are written (the
+        minimal-config invariant), unrelated keys are preserved, and the
+        existing 0o600 permissions are kept by ``_save_json``.
+        """
         try:
-            from jarvis.config import _load_json, _save_json
+            from jarvis.config import _load_json, _save_json, get_default_config
             config_path = default_config_path()
             config_path.parent.mkdir(parents=True, exist_ok=True)
 
             config = _load_json(config_path) or {}
-            config["whisper_model"] = self._selected_whisper_model
+            defaults = get_default_config()
+            backend = self._backend_combo.currentData()
+            selection: dict = {"whisper_backend": backend, "whisper_model": self._selected_whisper_model}
+            if backend == "openvino":
+                selection.update({
+                    "whisper_openvino_precision": self._precision_combo.currentData(),
+                    "whisper_openvino_device": "NPU",
+                    "whisper_openvino_runtime_source": self._runtime_combo.currentData(),
+                    "whisper_openvino_runtime_root": self._root_input.text().strip(),
+                    "whisper_openvino_python": self._python_input.text().strip(),
+                })
+            for key, value in selection.items():
+                if value == defaults.get(key):
+                    config.pop(key, None)
+                else:
+                    config[key] = value
 
             # _save_json keeps the file at 0o600 (it can hold llm_api_key).
             return _save_json(config_path, config)
         except Exception:
             return False
 
+    def _refresh_openvino_preflight(self) -> None:
+        """Lightweight discovery: registry/files first, then the worker probe.
+
+        Discovery and the file manifest are pure-Python and instant; the
+        handshake (Core version, companion, NPU enumeration) runs off the UI
+        thread in a short-lived worker subprocess.
+        """
+        try:
+            from jarvis.listening import openvino_models as _models
+            from jarvis.listening.openvino_runtime import discover_runtime
+            try:
+                cfg = load_settings()
+            except Exception:
+                cfg = None
+
+            class _PreflightWorker(KeepAliveWorker):
+                done = pyqtSignal(object)
+
+                def run(self):
+                    result: dict = {}
+                    try:
+                        discovery = discover_runtime(cfg) if cfg is not None else {"code": "OV_RUNTIME_NOT_FOUND"}
+                        result["discovery"] = discovery
+                        if not discovery.get("code"):
+                            from jarvis.listening.openvino_runtime import OVSpeechWorker, OVWhisperError
+                            try:
+                                worker = OVSpeechWorker(cfg)
+                                result["handshake"] = worker.request({"op": "handshake"}, timeout=60.0)
+                                worker.close()
+                            except OVWhisperError as exc:
+                                result["handshake_error"] = f"{exc}"
+                    except Exception as exc:  # pragma: no cover - defensive
+                        result["error"] = str(exc)
+                    self.done.emit(result)
+
+            self._ov_preflight_worker = _PreflightWorker()
+            self._ov_preflight_worker.done.connect(self._on_ov_preflight)
+            self._ov_preflight_worker.start()
+
+            if cfg is not None:
+                cache_root = str(getattr(cfg, "whisper_cache_dir", "") or "").strip()
+                model_dir = _models.resolve_model_dir(
+                    cache_root, self._selected_whisper_model,
+                    str(self._precision_combo.currentData() or "int8"),
+                )
+                if model_dir:
+                    self._update_status_row(self.ov_model_status, f"✅ Complete ({model_dir})", True)
+                else:
+                    self._update_status_row(self.ov_model_status, "⚠️ Not downloaded yet — use ⬇️ Download", False)
+        except Exception as exc:
+            self._update_status_row(self.ov_runtime_status, f"❌ {exc}", False)
+
+    def _on_ov_preflight(self, result: object) -> None:
+        """Render the preflight result on the UI thread."""
+        discovery = (result or {}).get("discovery") or {}
+        if discovery.get("code"):
+            self._update_status_row(
+                self.ov_runtime_status, f"❌ {discovery['code']}: {discovery.get('detail', '')}", False)
+            self._update_status_row(self.ov_companion_status, "⚠️ Pending runtime", False)
+            self._update_status_row(self.ov_npu_status, "⚠️ Pending runtime", False)
+            self._update_status_row(self.ov_pipeline_status, "⚠️ Pending runtime", False)
+        else:
+            self._update_status_row(
+                self.ov_runtime_status, f"✅ {discovery.get('root') or discovery.get('source')}", True)
+            handshake = (result or {}).get("handshake")
+            if handshake:
+                self._update_status_row(
+                    self.ov_companion_status,
+                    f"✅ GenAI {handshake.get('genai_version', '-')}@{handshake.get('genai_commit', '-')} "
+                    f"(semantics: {handshake.get('score_semantics', '-')})",
+                    bool(handshake.get("score_semantics")),
+                )
+                npu = handshake.get("npu")
+                if npu:
+                    self._update_status_row(self.ov_npu_status, f"✅ {npu}", True)
+                else:
+                    self._update_status_row(
+                        self.ov_npu_status,
+                        f"⚠️ OV_NPU_UNAVAILABLE (devices: {', '.join(handshake.get('devices') or ['-'])})",
+                        False,
+                    )
+                self._update_status_row(
+                    self.ov_pipeline_status,
+                    "⚙️ Preflight ok — pipeline starts with the daemon",
+                    True,
+                )
+            else:
+                error = (result or {}).get("handshake_error") or (result or {}).get("error") or "no result"
+                self._update_status_row(self.ov_companion_status, f"⚠️ {error}", False)
+                self._update_status_row(self.ov_npu_status, "⚠️ Pending handshake", False)
+                self._update_status_row(self.ov_pipeline_status, "⚠️ Pending handshake", False)
+        self.completeChanged.emit()
+
+    def _download_ov_model(self) -> None:
+        """Download the selected OpenVINO artifact off the UI thread."""
+        try:
+            cfg = load_settings()
+        except Exception:
+            cfg = None
+        cache_root = str(getattr(cfg, "whisper_cache_dir", "") or "").strip() if cfg is not None else ""
+        if not cache_root:
+            self._update_status_row(self.ov_model_status, "❌ Set whisper_cache_dir first (OV_MODEL_INCOMPLETE)", False)
+            return
+        model = self._selected_whisper_model
+        precision = str(self._precision_combo.currentData() or "int8")
+
+        class _DownloadWorker(KeepAliveWorker):
+            done = pyqtSignal(object)
+            progress = pyqtSignal(int, int)
+
+            def run(self):
+                from jarvis.listening import openvino_models as _models
+                result = _models.download_model(
+                    model, precision, cache_root,
+                    progress_cb=lambda d, t: self.progress.emit(d, t),
+                )
+                self.done.emit(result)
+
+        self._ov_download_worker = _DownloadWorker()
+        self._ov_download_worker.done.connect(self._on_ov_download)
+        self._ov_download_worker.progress.connect(
+            lambda d, t: self._update_status_row(self.ov_model_status, f"⬇️ {d}/{t} assets", False))
+        self._ov_download_worker.start()
+
+    def _on_ov_download(self, result: object) -> None:
+        if result and result.get("ok"):
+            self._update_status_row(self.ov_model_status, f"✅ Complete ({result.get('dir')})", True)
+        else:
+            code = (result or {}).get("code", "OV_MODEL_INCOMPLETE")
+            detail = (result or {}).get("error", "")
+            self._update_status_row(self.ov_model_status, f"❌ {code}: {detail} — retry with ⬇️", False)
+        self.completeChanged.emit()
+
     def initializePage(self):
         """Check status when page is shown."""
-        # Load the currently configured whisper model
+        # Load the currently configured selection so re-opening the wizard
+        # reconstructs exactly what is on disk.
         current_whisper_model = "medium"  # Default to medium multilingual
         try:
             cfg = load_settings()
             current_whisper_model = cfg.whisper_model
+            index = self._backend_combo.findData(getattr(cfg, "whisper_backend", "auto"))
+            if index >= 0:
+                self._backend_combo.setCurrentIndex(index)
+            index = self._precision_combo.findData(getattr(cfg, "whisper_openvino_precision", "int8"))
+            if index >= 0:
+                self._precision_combo.setCurrentIndex(index)
+            index = self._runtime_combo.findData(getattr(cfg, "whisper_openvino_runtime_source", "installed"))
+            if index >= 0:
+                self._runtime_combo.setCurrentIndex(index)
+            self._root_input.setText(str(getattr(cfg, "whisper_openvino_runtime_root", "") or ""))
+            self._python_input.setText(str(getattr(cfg, "whisper_openvino_python", "") or ""))
         except Exception:
             pass
 
@@ -2948,6 +3262,7 @@ class WhisperSetupPage(QWizardPage):
         # Set the selected model and rebuild slider
         self._selected_whisper_model = current_whisper_model
         self._rebuild_slider_ui()
+        self._on_backend_changed()
 
         # Refresh MLX status only on Apple Silicon
         if self._is_apple_silicon:
@@ -3084,9 +3399,12 @@ class WhisperSetupPage(QWizardPage):
         return self._is_complete
 
     def validatePage(self) -> bool:
-        """Save whisper model selection when leaving the page."""
-        self._save_whisper_model_to_config()
-        return True
+        """Save the selection; a failed save keeps the user on this page."""
+        saved = self._save_whisper_model_to_config()
+        if not saved:
+            self.status_label.setText("❌ Could not save the speech selection to config.json.")
+            self.status_label.setStyleSheet("color: #f87171;")
+        return bool(saved)
 
     def nextId(self) -> int:
         """Go to Provider Choice so the user can confirm or change
@@ -3393,14 +3711,33 @@ class DictationPage(QWizardPage):
 
     @staticmethod
     def _hotkey_options():
-        from jarvis.dictation.dictation_engine import format_hotkey_display
+        # NOTE: do NOT import jarvis.dictation.dictation_engine here. That
+        # module imports PortAudio (sounddevice) at module top, and loading a
+        # native audio backend while the wizard is being constructed on the
+        # UI/input thread crashes the frozen bundle with RPC_E_CANTCALLOUT_
+        # ININPUTSYNCCALL (0x8001010d). The hotkey display formatter is pure
+        # string logic, so it is replicated locally instead of imported.
         from jarvis.config import _default_dictation_hotkey
+
+        def _display(combo: str) -> str:
+            system = platform.system().lower()
+            parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+            out = []
+            for part in parts:
+                if part in ("cmd", "super", "win"):
+                    out.append("Win" if system == "windows" else "Cmd")
+                elif part == "alt" and system == "darwin":
+                    out.append("Option")
+                else:
+                    out.append(part.capitalize())
+            return " + ".join(out)
+
         default = _default_dictation_hotkey()
         options = [
-            ("ctrl+alt", format_hotkey_display("ctrl+alt")),
-            ("ctrl+cmd", format_hotkey_display("ctrl+cmd")),
-            ("ctrl+shift+d", format_hotkey_display("ctrl+shift+d")),
-            ("ctrl+shift", format_hotkey_display("ctrl+shift")),
+            ("ctrl+alt", _display("ctrl+alt")),
+            ("ctrl+cmd", _display("ctrl+cmd")),
+            ("ctrl+shift+d", _display("ctrl+shift+d")),
+            ("ctrl+shift", _display("ctrl+shift")),
         ]
         # Tag the platform default
         return [
@@ -3673,12 +4010,25 @@ class MCPPage(QWizardPage):
 
     @staticmethod
     def _is_node_available() -> bool:
-        """Check if Node.js (npx) is available on the system."""
+        """Check if Node.js (npx) is available on the system.
+
+        Do NOT import jarvis.tools.external.mcp_client here: that module pulls
+        in the ``mcp`` package at its top, and PyInstaller's archive extractor
+        loading those modules while a modal dialog holds the input queue
+        access-violates the frozen build (the wizard crash). The wizard only
+        needs to know whether ``npx`` resolves, which is a pure PATH lookup.
+        """
+        _trace("_is_node_available: resolving npx (no mcp import)")
         try:
-            from jarvis.tools.external.mcp_client import _resolve_command
-            _resolve_command("npx")
-            return True
-        except (FileNotFoundError, Exception):
+            if shutil.which("npx") or shutil.which("npx.cmd") \
+                    or shutil.which("npx.exe"):
+                return True
+            # Common Windows install location when PATH is stale.
+            candidate = Path(os.environ.get("ProgramFiles", "")) \
+                / "nodejs" / "npx.cmd"
+            return candidate.is_file()
+        except Exception as e:
+            _trace(f"_is_node_available: {type(e).__name__}: {e}")
             return False
 
     @staticmethod

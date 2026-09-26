@@ -65,6 +65,7 @@ KNOWN_ACTIONS = (
     "toggle_overlay",
     "open_command_palette",
     "cancel_current_agent_run",
+    "commit_utterance",
     "toaster_easter_egg",
     "ignore",
 )

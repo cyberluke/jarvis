@@ -5,7 +5,7 @@ Handles memory enrichment, tool planning and execution.
 """
 
 from __future__ import annotations
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from ..utils.redact import redact
 from ..system_prompt import build_system_prompt
@@ -22,8 +22,30 @@ from ..llm import (
 )
 
 
+class _TerminalFaceAdapter:
+    """Maps composer phase names onto the toaster widget state (K8)."""
+
+    def update_presence_mode(self, mode: str, label: str) -> None:
+        try:
+            from desktop_app.face_widget import get_jarvis_state, JarvisState
+            st = get_jarvis_state()
+            if st is None:
+                return
+            if label == "TERMINAL_ERROR":
+                st.set_state(JarvisState.ERROR)
+            elif label in ("TERMINAL_COMPOSING", "TERMINAL_CONFIRMATION"):
+                st.set_state(JarvisState.THINKING)
+            elif label == "COMMAND_READY":
+                st.set_state(JarvisState.SUCCESS)
+        except Exception:
+            pass
+
+
+_face_state_for_terminal = _TerminalFaceAdapter()
+
+
 def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
-                       tools=None, thinking=False):
+                       tools=None, thinking=False, on_token=None, stream=False):
     """Local indirection: route the engine's chat call through the active
     backend (Ollama or OpenAI-compatible, per ``cfg.llm_provider``) so the
     runtime swap is transparent to the rest of the engine.
@@ -32,12 +54,27 @@ def chat_with_messages(cfg, messages, *, timeout_sec=30.0, extra_options=None,
     to capture every chat call rather than reaching into the backend ABC.
     """
     backend = get_llm_backend(cfg)
+    # Completion-token budget. Reasoning models spend hidden reasoning tokens
+    # before the visible answer, so without an explicit budget the server's
+    # default truncates the reply to a fragment (a bare "---"). Inject
+    # llm_max_tokens as both max_tokens (OpenAI shape) and num_predict
+    # (Ollama options) so either backend honors it; a caller-supplied value
+    # always wins.
+    options = dict(extra_options or {})
+    budget = int(getattr(cfg, "llm_max_tokens", 0) or 0)
+    if budget > 0:
+        options.setdefault("max_tokens", budget)
+        opts = dict(options.get("options") or {})
+        opts.setdefault("num_predict", budget)
+        options["options"] = opts
     return backend.chat(
         cfg.llm_chat_model, messages,
         timeout_sec=timeout_sec,
-        extra_options=extra_options,
+        extra_options=options,
         tools=tools,
         thinking=thinking,
+        on_token=on_token,
+        stream=stream,
     )
 from .enrichment import (
     extract_search_params_for_memory,
@@ -781,10 +818,68 @@ def _build_enrichment_context_hint(cfg, recent_messages: list) -> Optional[str]:
     return "\n\n".join(parts) if parts else None
 
 
+class _StreamedSpeechChunker:
+    """Turn streamed LLM deltas into speakable sentence chunks.
+
+    The chunker keeps a small buffer, flushes on sentence terminators
+    (``.``, ``!``, ``?``) and newlines, and forwards each complete chunk to
+    the TTS engine's ``speak`` as it forms — so the first sentence is
+    audible while the rest of the reply is still being generated. Call
+    :meth:`flush` once per LLM turn to release any partial trailing text.
+
+    ``spoke`` lets the caller know whether the reply already reached the
+    TTS queue in streamed chunks, so the final one-shot ``speak`` can be
+    skipped without dropping or duplicating audio.
+    """
+
+    _TERMINATORS = frozenset({".", "!", "?", "\n"})
+
+    def __init__(self, tts: Any) -> None:
+        self._tts = tts
+        self._buffer = ""
+        self.spoke = False
+
+    def feed(self, token: str) -> None:
+        if not token:
+            return
+        self._buffer += token
+        self._flush_complete()
+
+    def flush(self) -> None:
+        """Emit any trailing partial sentence (end of one LLM turn)."""
+        tail = self._buffer.strip()
+        self._buffer = ""
+        if tail:
+            self._speak(tail)
+
+    def _flush_complete(self) -> None:
+        while True:
+            cut = -1
+            for i, ch in enumerate(self._buffer):
+                if ch in self._TERMINATORS:
+                    cut = i
+                    break
+            if cut < 0:
+                return
+            chunk = self._buffer[: cut + 1].strip()
+            self._buffer = self._buffer[cut + 1:]
+            if chunk:
+                self._speak(chunk)
+
+    def _speak(self, chunk: str) -> None:
+        try:
+            self._tts.speak(chunk)
+            self.spoke = True
+        except Exception:
+            pass
+
+
 def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                     text: str, dialogue_memory: "DialogueMemory",
                     language: Optional[str] = None,
-                    quiet: bool = False) -> Optional[str]:
+                    quiet: bool = False,
+                    on_token: Optional[Any] = None,
+                    stream: bool = False) -> Optional[str]:
     """
     Main entry point for reply generation.
 
@@ -810,6 +905,108 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     """
     # Step 1: Redact sensitive information
     redacted = redact(text)
+
+    # Step 1b: Deterministic Terminal Command Composer route (K7). Fires
+    # only for the narrow terminal-intent vocabulary; otherwise the normal
+    # agent loop continues unchanged. The short Czech status line becomes
+    # the whole reply for this turn (no extra LLM round-trip).
+    if getattr(cfg, "terminal_composer_enabled", True):
+        try:
+            from ..terminal.coordinator import TerminalComposer
+            from ..terminal.context_broker import TerminalContextBroker
+            from ..terminal.session_memory import TerminalSessionMemory
+            from ..daemon import get_terminal_composer, set_terminal_composer
+            _tc = get_terminal_composer()
+            if _tc is None:
+                from ..terminal.bridge.named_pipe import BridgeServer
+                from ..terminal.providers.conhost import ConHostProvider
+                from ..terminal.providers.windows_terminal import (
+                    WindowsTerminalProvider,
+                )
+                from ..terminal.providers.vscode import VsCodeProvider
+                _bridge = BridgeServer(
+                    pipe_name=str(getattr(
+                        cfg, "terminal_bridge_pipe_name",
+                        "Toustovac.TerminalBridge.v1",
+                    )),
+                )
+                _bridge.start()
+                from ..daemon import set_terminal_bridge
+                set_terminal_bridge(_bridge)
+                from ..terminal.providers.wsl import WslProvider
+                from ..terminal.providers.ssh import SshProvider
+                _broker = TerminalContextBroker({
+                    "conhost": ConHostProvider(),
+                    "windows_terminal": WindowsTerminalProvider(_bridge),
+                    "vscode": VsCodeProvider(_bridge),
+                    "vscode_insiders": VsCodeProvider(_bridge, insiders=True),
+                    # transport-proven hosts (wsl.exe / ssh.exe as the
+                    # console's own process resolve through conhost first)
+                    "wsl": WslProvider(_bridge),
+                    "ssh": SshProvider(_bridge),
+                })
+                _tc = TerminalComposer(
+                    _broker,
+                    TerminalSessionMemory(ttl_sec=float(getattr(
+                        cfg, "terminal_command_memory_ttl_s", 3600.0))),
+                    paste_gestures={
+                        "windows_terminal": str(getattr(
+                            cfg, "terminal_windows_terminal_paste",
+                            "ctrl_shift_v")),
+                        "conhost": str(getattr(
+                            cfg, "terminal_conhost_paste", "ctrl_v")),
+                    },
+                    restore_clipboard=bool(getattr(
+                        cfg, "terminal_clipboard_restore", True)),
+                )
+                set_terminal_composer(_tc)
+            if TerminalComposer.is_terminal_intent(redacted):
+                def _chat(messages, **kw):
+                    return chat_with_messages(cfg, messages, **kw)
+                term_reply = _tc.handle(
+                    _chat, redacted,
+                    face=_face_state_for_terminal, tts=tts,
+                )
+                if term_reply:
+                    if tts is not None and getattr(tts, "enabled", False):
+                        tts.speak(term_reply, language=language)
+                    if dialogue_memory is not None:
+                        try:
+                            dialogue_memory.add_message("user", redacted)
+                            dialogue_memory.add_message(
+                                "assistant", term_reply)
+                        except Exception:
+                            pass
+                    if not quiet:
+                        print(term_reply, flush=True)
+                    return term_reply
+        except Exception as _term_exc:  # pragma: no cover — defensive
+            debug_log(f"terminal composer pass skipped: {_term_exc}", "terminal")
+
+    # Step 1c: Deterministic Everywhere voice route (everywhere.spec.md).
+    # Voice invokes the same action broker as the toolbar: it resolves the
+    # current SelectionSnapshot and runs the same action id. No snapshot ->
+    # one short Czech line; the reply engine otherwise continues unchanged.
+    if getattr(cfg, "everywhere_enabled", True):
+        try:
+            from ..daemon import get_everywhere_broker
+            _ew = get_everywhere_broker()
+            if _ew is not None:
+                _ew_reply = _ew.handle_voice_utterance(redacted)
+                if _ew_reply:
+                    if tts is not None and getattr(tts, "enabled", False):
+                        tts.speak(_ew_reply, language=language)
+                    if dialogue_memory is not None:
+                        try:
+                            dialogue_memory.add_message("user", redacted)
+                            dialogue_memory.add_message("assistant", _ew_reply)
+                        except Exception:
+                            pass
+                    if not quiet:
+                        print(_ew_reply, flush=True)
+                    return _ew_reply
+        except Exception as _ew_exc:  # pragma: no cover — defensive
+            debug_log(f"everywhere pass skipped: {_ew_exc}", "everywhere")
 
     # Step 2: Check for recent dialogue context
     recent_messages = []
@@ -1557,14 +1754,30 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         # Add model-size-appropriate prompt components
         guidance.extend(prompts.to_list())
 
-        # Both current TTS engines (Piper, Chatterbox) only support English.
-        # Responding in another language would produce garbled audio.
-        # Remove this constraint when a multilingual TTS engine is added.
-        tts_engine = getattr(cfg, 'tts_engine', 'piper')
-        if tts_engine in ('piper', 'chatterbox'):
-            guidance.append(
-                "Always respond in English regardless of the language the user speaks in."
-            )
+        # Compact Presence mode context (doc §39 item 3, §40). Applied
+        # deterministically from the coordinator; the LLM never mutates it.
+        try:
+            from ..daemon import get_presence_coordinator
+            _pc = get_presence_coordinator()
+            if _pc is not None:
+                _pb = _pc.runtime_block()
+                if _pb:
+                    guidance.append("\n" + _pb)
+        except Exception as _pc_exc:  # pragma: no cover — defensive
+            debug_log(f"presence block skipped: {_pc_exc}", "planning")
+
+        # Interaction memory block (doc §21/§22): anti-repetition humor
+        # ledger, asked-question list, open threads. Fail-soft — an empty
+        # ledger simply contributes no block.
+        try:
+            from ..daemon import get_interaction_memory
+            _im = get_interaction_memory()
+            if _im is not None:
+                _im_block = _im.prompt_block()
+                if _im_block:
+                    guidance.append("\n" + _im_block)
+        except Exception as _im_exc:  # pragma: no cover — defensive
+            debug_log(f"interaction block skipped: {_im_exc}", "planning")
 
         if warm_profile_block:
             # Pre-query, query-agnostic user context. Lives OUTSIDE the
@@ -1652,6 +1865,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             # like `wikipedia.run` or `google.search` — gemma models have strong
             # priors to emit those even when they aren't in the tool list.
             guidance.append(_text_tool_call_guidance(list(known_tool_names)))
+
+        # DesktopWorldModel projection (doc §15–16): injected only when the
+        # router selected desktopTool — relevance routing through the
+        # existing tool-selection machinery, not a second parallel gate.
+        if "desktopTool" in allowed_tools:
+            try:
+                from ..desktop import world_snapshot
+                _snap = world_snapshot()
+                _fg = _snap["foreground"]["title"] or "(none)"
+                guidance.append(
+                    "\n[Desktop]\n"
+                    f"foreground={_fg}\n"
+                    f"window_count={_snap['window_count']}"
+                )
+            except Exception as _snap_exc:  # pragma: no cover — defensive
+                debug_log(f"desktop snapshot skipped: {_snap_exc}", "planning")
         # else: tools are passed via the native tools API parameter — do not include tools_desc
         # here as well, since that confuses the model and causes it to not use tools properly.
 
@@ -1907,6 +2136,17 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
     # to the steps of the current plan.
     _plan_steps_baseline = sum(1 for m in messages if m.get("tool_name"))
 
+    # Streaming speech: when enabled, sentence chunks reach the TTS queue
+    # while generation continues, so playback starts after the first
+    # sentence instead of waiting for the full reply. The chunker only
+    # attaches when a TTS engine is present and enabled; otherwise the
+    # existing one-shot ``tts.speak`` at the end of this function handles
+    # audio exactly as before.
+    _chunker: Optional[_StreamedSpeechChunker] = None
+    if stream and tts is not None and getattr(tts, "enabled", False):
+        _chunker = _StreamedSpeechChunker(tts)
+        on_token = _chunker.feed
+
     while turn < max_turns:
         turn += 1
         debug_log(f"🔁 messages loop turn {turn}", "planning")
@@ -2108,6 +2348,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 extra_options=None,
                 tools=_dump_tools_schema,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                on_token=on_token,
+                stream=stream,
             )
             dump_reply_turn(
                 session_id=_dump_session_id,
@@ -2119,6 +2361,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 use_text_tools=use_text_tools,
                 response=llm_resp,
             )
+            if _chunker is not None:
+                _chunker.flush()
         except ToolsNotSupportedError:
             # Model doesn't support the native tools API — switch to text-based tool calling
             # for the rest of this session and rebuild the system message to include tool
@@ -2138,6 +2382,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 extra_options=None,
                 tools=None,
                 thinking=getattr(cfg, 'llm_thinking_enabled', False),
+                on_token=on_token,
+                stream=stream,
             )
             dump_reply_turn(
                 session_id=_dump_session_id,
@@ -2149,6 +2395,8 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 use_text_tools=True,
                 response=llm_resp,
             )
+            if _chunker is not None:
+                _chunker.flush()
         if not llm_resp:
             debug_log("  ❌ LLM returned no response", "planning")
             break
@@ -2619,9 +2867,15 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
         except Exception as e:
             debug_log(f"reply formatting failed: {e}", "planning")
 
-        # TTS output - callbacks handled by calling code
+        # TTS output - callbacks handled by calling code. When the reply
+        # was already streamed to the queue sentence-by-sentence, only the
+        # trailing partial chunk still needs flushing; re-speaking the
+        # full text would duplicate every sentence.
         if tts is not None and tts.enabled:
-            tts.speak(safe_reply)
+            if _chunker is not None and _chunker.spoke:
+                _chunker.flush()
+            else:
+                tts.speak(safe_reply)
 
     # Step 11: Add to dialogue memory
     if dialogue_memory is not None:
@@ -2640,5 +2894,22 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
             debug_log("interaction added to dialogue memory", "memory")
         except Exception as e:
             debug_log(f"dialogue memory error: {e}", "memory")
+
+    # Step 11b: social rhythm beats into the interaction memory (§20–22).
+    # Deterministic recording only — no extra LLM round-trip.
+    try:
+        from ..daemon import get_interaction_memory
+        from ..memory.interaction import classify_humor_category
+        _im = get_interaction_memory()
+        if _im is not None:
+            if redacted:
+                _im.record_topic(redacted[:160])
+            if reply and "?" in reply:
+                _im.record_question(reply[:160])
+            _hum = classify_humor_category(reply or "")
+            if _hum:
+                _im.record_humor(_hum)
+    except Exception as _im_exc:  # pragma: no cover — defensive
+        debug_log(f"interaction memory update skipped: {_im_exc}", "memory")
 
     return reply

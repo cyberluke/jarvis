@@ -47,6 +47,7 @@ from .debug import debug_log
 from .listening.listener import VoiceListener
 from .utils.location import get_location_context, is_location_available
 from .system_prompt import build_system_prompt
+from .presence import PresenceMode
 from .proactive import (
     ProactiveToasterService,
     make_chat_callable,
@@ -64,6 +65,109 @@ _global_dictation_engine = None  # Dictation engine reference for history UI
 # Proactive remark service (see proactive.spec.md); created once main()
 # finishes booting component init.
 _global_proactive_service: Optional[ProactiveToasterService] = None
+# Presence orchestration layer (see presence.py)
+_global_presence_coordinator: Optional[PresenceCoordinator] = None
+
+def get_presence_coordinator() -> Optional[PresenceCoordinator]:
+    """Return the global presence coordinator instance."""
+    return _global_presence_coordinator
+
+# Short-lived social/interaction memory (see memory/interaction.py).
+# Distinct from DialogueMemory: rhythm-level beats, not raw turns.
+_global_interaction_memory = None
+
+def get_interaction_memory():
+    """Return the global interaction-memory instance (or None)."""
+    return _global_interaction_memory
+
+# Terminal Command Composer (see terminal/coordinator.py) and its
+# named-pipe bridge. Both are lazily created on the first terminal-intent
+# turn inside the reply engine; these are the single accessors.
+_global_terminal_composer = None
+_global_terminal_bridge = None
+
+def get_terminal_composer():
+    """Return the lazily-created terminal composer (or None)."""
+    return _global_terminal_composer
+
+def set_terminal_composer(instance) -> None:
+    global _global_terminal_composer
+    _global_terminal_composer = instance
+
+def get_terminal_bridge():
+    """Return the bridge pipe server (or None)."""
+    return _global_terminal_bridge
+
+def set_terminal_bridge(instance) -> None:
+    global _global_terminal_bridge
+    _global_terminal_bridge = instance
+
+# Everywhere action broker (see everywhere/everywhere.spec.md). Lazily
+# created in main() when ``everywhere_enabled``; the native host connects
+# over the current-user named pipe. Voice and toolbar share this broker.
+_global_everywhere_broker = None
+
+def get_everywhere_broker():
+    """Return the Everywhere broker (or None when disabled)."""
+    return _global_everywhere_broker
+
+
+# Track the spawned native-host process so shutdown can stop it.
+_global_everywhere_host_proc = None
+
+
+def _everywhere_host_exe() -> Optional[str]:
+    """Resolve the native Everywhere host executable path.
+
+    Frozen build: ``_MEIPASS/Toastovac.Everywhere.Host.exe`` (bundled by
+    jarvis_desktop.spec). Dev tree: ``build/everywhere_host/``. Returns None
+    when no host exe is found.
+    """
+    import os as _os
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(
+            _os.path.join(meipass, "Toastovac.Everywhere.Host.exe"))
+    # Dev tree: repo root is three levels up from src/jarvis/daemon.py.
+    repo_root = _os.path.dirname(_os.path.dirname(
+        _os.path.dirname(_os.path.abspath(__file__))))
+    candidates.append(_os.path.join(
+        repo_root, "build", "everywhere_host", "Toastovac.Everywhere.Host.exe"))
+    for path in candidates:
+        if path and _os.path.isfile(path):
+            return path
+    return None
+
+
+def _spawn_everywhere_host() -> None:
+    """Launch the native Everywhere host so the toolbar and Alt+drag overlay
+    exist. No-op when the exe is missing, already running, or the platform is
+    not Windows."""
+    global _global_everywhere_host_proc
+    if sys.platform != "win32":
+        return
+    existing = _global_everywhere_host_proc
+    if existing is not None and existing.poll() is None:
+        return  # already running
+    exe = _everywhere_host_exe()
+    if not exe:
+        debug_log("everywhere host exe not found; UI overlay unavailable",
+                  "everywhere")
+        return
+    import subprocess
+    try:
+        _global_everywhere_host_proc = subprocess.Popen(
+            [exe],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        debug_log(f"everywhere host spawned pid={_global_everywhere_host_proc.pid}",
+                  "everywhere")
+        print("🪟 Everywhere host started", flush=True)
+    except Exception as exc:
+        debug_log(f"everywhere host spawn failed: {exc}", "everywhere")
 # Home Assistant Voice PE manager (see
 # src/jarvis/integrations/voice_pe/voice_pe.spec.md). One manager owns the
 # asyncio loop thread and one device entry per paired satellite. None when the
@@ -115,6 +219,8 @@ CHAT_CANCEL_IPC_PREFIX = "__CHAT_CANCEL__"
 CHAT_NEW_SESSION_IPC_PREFIX = "__CHAT_NEW_SESSION__"
 CHAT_REWIND_IPC_PREFIX = "__CHAT_REWIND__:"
 CHAT_RESTORE_IPC_PREFIX = "__CHAT_RESTORE__:"
+PRESENCE_IPC_PREFIX = "__PRESENCE__:"
+PRESENCE_IPC_PREFIX = "__PRESENCE__:"
 
 
 def request_stop() -> None:
@@ -159,6 +265,26 @@ def get_pending_diary_chunks() -> list:
     if _global_dialogue_memory is None:
         return []
     return _global_dialogue_memory.get_pending_chunks()
+
+
+def record_coach_session(transcript_lines: list, summary: str) -> bool:
+    """Push a coach/meeting session into the shared dialogue memory so the
+    normal diary update picks it up (topics, Q&A highlights, follow-ups).
+    Returns True when the messages were recorded."""
+    global _global_dialogue_memory
+    if _global_dialogue_memory is None:
+        return False
+    try:
+        for speaker, text in transcript_lines or []:
+            role = "user" if speaker == "me" else "assistant"
+            _global_dialogue_memory.add_message(role, str(text))
+        if summary and summary.strip():
+            _global_dialogue_memory.add_message(
+                "assistant", f"[Meeting summary] {summary.strip()}")
+        return True
+    except Exception as exc:
+        debug_log(f"record_coach_session failed: {exc}", "memory")
+        return False
 
 
 def get_hot_window_messages() -> list:
@@ -802,7 +928,7 @@ def main(smoke_test: bool = False) -> None:
     """
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener, _global_proactive_service
-    global _global_voice_pe_manager
+    global _global_voice_pe_manager, _global_everywhere_broker
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -897,6 +1023,35 @@ def main(smoke_test: bool = False) -> None:
         max_interactions=20
     )
     print("✓ Dialogue memory initialized", flush=True)
+
+    # Initialize presence coordinator
+    print("🧘 Initializing presence coordinator...", flush=True)
+    from .presence import PresenceCoordinator
+    _global_presence_coordinator = PresenceCoordinator(
+        default_mode=getattr(cfg, "presence_default_mode", "passive")
+    )
+    print("✓ Presence coordinator initialized", flush=True)
+
+    def _on_presence_change(state):
+        _emit_ipc_event(
+            PRESENCE_IPC_PREFIX,
+            "changed",
+            {"mode": state.mode.value, "label": state.label},
+            "presence",
+        )
+        # Keep the social memory's mode history in sync (§20 mode_history).
+        if _global_interaction_memory is not None:
+            try:
+                _global_interaction_memory.record_mode(state.mode.value)
+            except Exception:
+                pass
+
+    _global_presence_coordinator.subscribe(_on_presence_change)
+
+    # Initialize interaction memory (bounded, in-process).
+    from .memory.interaction import InteractionMemory
+    global _global_interaction_memory
+    _global_interaction_memory = InteractionMemory()
 
     # Wire the conversation-scoped warm-profile cache to graph mutations.
     # When the User or Directives branch is mutated mid-conversation, the
@@ -1020,7 +1175,9 @@ def main(smoke_test: bool = False) -> None:
     # Initialize voice listening (only if dependencies available)
     print("🎤 Initializing voice listener (this may take a moment to load Whisper model)...", flush=True)
     voice_thread: Optional[threading.Thread] = None
-    voice_thread = VoiceListener(db, cfg, tts, _global_dialogue_memory)
+    voice_thread = VoiceListener(
+        db, cfg, tts, _global_dialogue_memory, _global_presence_coordinator
+    )
     voice_thread.start()
     print("✓ Voice listener thread started (loading Whisper model in background)", flush=True)
 
@@ -1155,12 +1312,43 @@ def main(smoke_test: bool = False) -> None:
     except Exception as e:
         debug_log(f"virtual microphone publisher init failed (non-fatal): {e}", "voice")
 
+    # Everywhere action broker (everywhere.spec.md). One pipe server for
+    # the native host; voice reuses the same broker and the same snapshots.
+    try:
+        if bool(getattr(cfg, "everywhere_enabled", True)):
+            from .everywhere.broker import EverywhereBroker
+
+            _global_everywhere_broker = EverywhereBroker(cfg)
+            # The subtitles pipeline reuses the live Whisper listener and the
+            # Piper TTS engine; hand both to the broker before the host
+            # connects so an AI Subtitles start can begin capturing at once.
+            _global_everywhere_broker._voice_listener = voice_thread
+            _global_everywhere_broker._tts_engine = tts
+            _global_everywhere_broker.start()
+            print("🪟 Everywhere broker started", flush=True)
+            # Spawn the native host so the toolbar / Alt+drag overlay exist.
+            # Without this the broker listens on the pipe but no client ever
+            # connects, so the Everywhere UI never appears.
+            _spawn_everywhere_host()
+        else:
+            print("🪟 Everywhere disabled", flush=True)
+    except Exception as e:
+        _global_everywhere_broker = None
+        debug_log(f"everywhere broker init failed (non-fatal): {e}", "everywhere")
+        print(f"  ⚠ Everywhere not available: {e}", flush=True)
+
     if smoke_test:
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
 
         # Clean shutdown: stop engines, close database, tear down MCP runtime.
         # The caller is responsible for printing SMOKE_TEST_PASSED / FAILED.
+        if _global_everywhere_broker is not None:
+            try:
+                _global_everywhere_broker.stop()
+            except Exception:
+                pass
+            _global_everywhere_broker = None
         if dictation is not None:
             try:
                 dictation.stop()
@@ -1331,11 +1519,19 @@ def main(smoke_test: bool = False) -> None:
                         llm_base_url=cfg.llm_base_url,
                         tts=tts,
                         busy_check=_proactive_busy_check,
+                        presence=_global_presence_coordinator,
                     ):
                         emit_remark(_remark, tts)
                 except Exception as e:
                     debug_log(f"proactive tick error (non-fatal): {e}", "proactive")
                 last_proactive_check = now
+
+            # Inactivity detection for presence transitions
+            if _global_dialogue_memory is not None and _global_presence_coordinator is not None:
+                if _global_presence_coordinator.get_state().mode == PresenceMode.CONVERSATION:
+                    if now - _global_dialogue_memory._last_activity_time >= cfg.dialogue_memory_timeout:
+                        debug_log("conversation inactivity detected, transitioning to passive", "presence")
+                        _global_presence_coordinator.on_user_idle_detected()
 
         # Keep voice thread alive (unless stop requested)
         if voice_thread is not None:
@@ -1348,6 +1544,26 @@ def main(smoke_test: bool = False) -> None:
     finally:
         print("🔄 Daemon shutting down - saving memory...", flush=True)
         debug_log("daemon finally block starting - performing cleanup", "jarvis")
+
+        # Stop the Everywhere broker first: its pipe workers are daemon
+        # threads and the database may close under a late frame otherwise.
+        if _global_everywhere_broker is not None:
+            try:
+                _global_everywhere_broker.stop()
+            except Exception:
+                pass
+            _global_everywhere_broker = None
+            debug_log("everywhere broker stopped", "everywhere")
+        # Stop the native Everywhere host process we spawned.
+        global _global_everywhere_host_proc
+        if _global_everywhere_host_proc is not None:
+            try:
+                if _global_everywhere_host_proc.poll() is None:
+                    _global_everywhere_host_proc.terminate()
+            except Exception:
+                pass
+            _global_everywhere_host_proc = None
+            debug_log("everywhere host stopped", "everywhere")
 
         # Clean shutdown - stop dictation first
         if dictation is not None:

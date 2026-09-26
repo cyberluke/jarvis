@@ -25,6 +25,7 @@ from .state_manager import StateManager, ListeningState
 from ..utils.audio_lock import portaudio_lock
 from .wake_detection import is_wake_word_detected, extract_query_after_wake, is_stop_command
 from .transcript_buffer import TranscriptBuffer
+from ..presence import PresenceMode
 from . import audio_io as _audio_io
 
 try:  # pragma: no cover - trivial import shim
@@ -133,6 +134,17 @@ _WHISPER_BOILERPLATE: tuple = (
     "mbc news",
     "감사합니다",
     "kankasha mashimasho",
+    # Vietnamese YouTube-outro hallucinations: large-v3 emits these on silence,
+    # background music or noise. They surface when no language is forced and
+    # auto-detection drifts to `vi`. Matched by normalized (diacritic-folded)
+    # prefix, so the plain ASCII keys below also catch the diacritic forms.
+    # Note: `đ`/`Đ` (U+0111/U+0110) is a distinct letter, not a diacritic, so
+    # it survives NFKD unchanged. Keys that span a `đ` word keep the `đ`.
+    "cam on cac ban",          # Cảm ơn các bạn … (thanks for watching)
+    "hen gap lai cac ban",     # Hẹn gặp lại các bạn … (see you in the next videos)
+    "hay subscribe cho kenh",  # Hãy subscribe cho kênh … (subscribe to the channel)
+    "hay đang ky kenh",        # Hãy đăng ký kênh … (subscribe to the channel)
+    "chao tam biet",           # Chào tạm biệt (goodbye)
 )
 
 #: Single-token boilerplate (not ``konec``, which is a stop command).
@@ -879,7 +891,8 @@ class VoiceListener(threading.Thread):
     """Main voice listening thread that orchestrates all voice processing."""
 
     def __init__(self, db: "Database", cfg, tts: Optional[Any],
-                 dialogue_memory: "DialogueMemory"):
+                 dialogue_memory: "DialogueMemory",
+                 presence_coordinator: "PresenceCoordinator"):
         """
         Initialise voice listener.
 
@@ -888,6 +901,7 @@ class VoiceListener(threading.Thread):
             cfg: Configuration object
             tts: Text-to-speech engine (optional)
             dialogue_memory: Dialogue memory instance
+            presence_coordinator: Presence orchestration layer
         """
         super().__init__(daemon=True)
 
@@ -895,6 +909,7 @@ class VoiceListener(threading.Thread):
         self.cfg = cfg
         self.tts = tts
         self.dialogue_memory = dialogue_memory
+        self.presence_coordinator = presence_coordinator
         self._should_stop = False
         self._dictation_active = False  # Pause flag set by dictation engine
         self._first_utterance = True  # Suppress turn separator before the very first transcription
@@ -925,9 +940,20 @@ class VoiceListener(threading.Thread):
         # (code, avg_logprob) ranking, best first.
         self._multiselect_runner_up: Optional[str] = None
         self._multiselect_scores: list[tuple[str, float]] = []
+        # Whisper language-detection evidence for the grammar pipeline:
+        # the winning language's probability and the full (code, prob) table
+        # from the decoder's language-token logprobs, refreshed per utterance.
+        self._last_language_probability: float = 1.0
+        self._last_language_logprob: float = 0.0
+        self._last_all_language_probs: list[tuple[str, float]] = []
+        # Language-aware grammar validation pipeline (Gemma). Disabled unless
+        # ``grammar_judge_enabled`` is set; a disabled pipeline is a
+        # transparent pass-through.
+        from .grammar import GrammarPipeline
+        self._grammar_pipeline = GrammarPipeline(cfg)
 
         # Audio processing components
-        self._whisper_backend: Optional[str] = None  # "mlx" or "faster-whisper"
+        self._whisper_backend: Optional[str] = None  # "mlx", "faster-whisper", or "openvino"
         self._whisper_device: Optional[str] = None  # "cpu" or "cuda" (resolved from CTranslate2)
         self._mlx_model_repo: Optional[str] = None  # For MLX backend
         self.model: Optional[Any] = None  # WhisperModel for faster-whisper, None for MLX
@@ -1030,6 +1056,18 @@ class VoiceListener(threading.Thread):
         # Thinking tune player
         self._tune_player: Optional = None
 
+        # Reply-generation gate. While an LLM reply is being generated (the
+        # synchronous run_reply_engine block in _dispatch_query) a new STT turn
+        # must NOT interrupt it: consecutive Voice PE STT results (including
+        # empty/noise from a reopened continued-conversation mic) would
+        # otherwise cut off the in-flight reply. Instead the newest turn is
+        # queued in _queued_turn and drained when the current reply finishes.
+        self._reply_in_flight = threading.Event()
+        self._reply_gate_lock = threading.Lock()
+        # (query, turn_context) of the newest queued turn; only the latest is
+        # kept because an older queued turn is superseded by a newer one.
+        self._queued_turn: Optional[tuple] = None
+
         # Optional satellite sink (Voice PE). Set by the Voice PE manager after
         # construction; it forwards the VAD/STT/agent milestones as standard
         # Voice Assistant events, which are also what drives the LED phases on
@@ -1050,6 +1088,13 @@ class VoiceListener(threading.Thread):
         if sink is None:
             return
         context = token if token is not None else self._turn_context
+        # Local-microphone turns carry no satellite context. Forwarding their
+        # VAD/transcript/reply milestones to the satellite is both wrong (the
+        # satellite's state machine would chase a run it never started) and
+        # noisy (the all-None identity lines). Only a real satellite turn —
+        # one with a turn context — is a satellite milestone.
+        if context is None:
+            return
         # The four identity names, spelled out, so a log line alone tells which
         # satellite, connection and run a milestone belongs to.
         stream_id = getattr(context, "stream", None)
@@ -1137,12 +1182,34 @@ class VoiceListener(threading.Thread):
         except Exception:
             return None
 
+    def commit_pending_utterance(self) -> bool:
+        """Force-dispatch the collected speech NOW (the Voice PE "commit"
+        button in continuous mode).
+
+        The long ``endpoint_silence_ms`` (2200ms) lets a slow speaker think
+        mid-sentence, but someone in a hurry can press the centre button to
+        commit what has been collected so far without waiting for the endpoint.
+        Returns True when a pending query was dispatched.
+        """
+        query, turn_context = self.state_manager.clear_pending()
+        query = (query or "").strip()
+        if not query:
+            debug_log("commit pressed but no pending utterance collected", "voice")
+            return False
+        debug_log(f"commit pressed: force-dispatching '{query[:40]}'", "voice")
+        self._dispatch_query(query, turn_context)
+        return True
+
     def _accept_satellite_transcript(self, text_lower: str) -> None:
         """Open the query directly for a satellite push-to-talk run.
 
         The centre button is the engagement signal, so the wake-word check and
         the intent judge are both skipped and the transcript is the query.
         """
+        if self.presence_coordinator.get_state().mode != PresenceMode.CONVERSATION:
+            self.presence_coordinator.on_wake_word_detected()
+        else:
+            debug_log("wake word detected during conversation, suppressing transition", "presence")
         self.state_manager.cancel_hot_window_activation()
         self._transcript_buffer.mark_segment_processed(text_lower)
         self._clear_audio_buffers()
@@ -1183,6 +1250,15 @@ class VoiceListener(threading.Thread):
         self._should_stop = True
         self.state_manager.stop()
         self._stop_thinking_tune()
+        # Terminate the OpenVINO worker with its owner so stale responses
+        # cannot arrive after a restart.
+        worker = getattr(self, "_ov_worker", None)
+        if worker is not None:
+            try:
+                worker.close()
+            except Exception:
+                pass
+            self._ov_worker = None
 
     def _start_thinking_tune(self) -> None:
         """Start the thinking tune when processing a query."""
@@ -1273,7 +1349,8 @@ class VoiceListener(threading.Thread):
                     self._dispatch_query(query, turn_context)
 
             # Check hot window expiry
-            self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+            if self.state_manager.check_hot_window_expiry(self.cfg.voice_debug):
+                self.presence_coordinator.on_conversation_ended()
             return
 
         text_lower = text.strip().lower()
@@ -1533,6 +1610,10 @@ class VoiceListener(threading.Thread):
             wake_word = getattr(self.cfg, "wake_word", "toustovač")
             aliases = set(getattr(self.cfg, "wake_aliases", [])) | {wake_word}
             query_fragment = extract_query_after_wake(text_lower, wake_word, list(aliases))
+            if self.presence_coordinator.get_state().mode != PresenceMode.CONVERSATION:
+                self.presence_coordinator.on_wake_word_detected()
+            else:
+                debug_log("wake word detected during conversation, suppressing transition", "presence")
             self.state_manager.cancel_hot_window_activation()
             self._transcript_buffer.mark_segment_processed(text_lower)
             self._clear_audio_buffers()
@@ -1849,6 +1930,7 @@ class VoiceListener(threading.Thread):
                             text_lower, context=self._turn_context
                         )
                             self._start_thinking_tune()
+                            self.presence_coordinator.on_conversation_started()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
                             except Exception:
@@ -1892,6 +1974,7 @@ class VoiceListener(threading.Thread):
                             text_lower, context=self._turn_context
                         )
                             self._start_thinking_tune()
+                            self.presence_coordinator.on_conversation_started()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
                             except Exception:
@@ -1942,6 +2025,7 @@ class VoiceListener(threading.Thread):
                             text_lower, context=self._turn_context
                         )
                             self._start_thinking_tune()
+                            self.presence_coordinator.on_conversation_started()
                             try:
                                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
                             except Exception:
@@ -2002,6 +2086,10 @@ class VoiceListener(threading.Thread):
 
             # Start thinking tune and show processing message
             self._start_thinking_tune()
+            if self.presence_coordinator.get_state().mode != PresenceMode.CONVERSATION:
+                self.presence_coordinator.on_wake_word_detected()
+            else:
+                debug_log("wake word detected during conversation, suppressing transition", "presence")
             try:
                 print(f"\n✨ Working on it: {self.state_manager.get_pending_query()}")
             except Exception:
@@ -2041,161 +2129,235 @@ class VoiceListener(threading.Thread):
     def _dispatch_query(self, query: str, turn_context: Optional[object] = None) -> None:
         """
         Dispatch a complete query to the reply engine.
-
+        
         Args:
             query: Complete user query to process
             turn_context: Identity of the turn this text came from, taken from
                 the collection in one atomic read; ``None`` re-reads the live one
         """
-        debug_log(f"dispatching query: '{query}'", "voice")
-        # The query of the most recent dispatch, for the STT record's trail.
-        self.metrics["last_dispatched_query"] = query
-
-        # Clear audio buffers to prevent stale audio from next query
-        self._clear_audio_buffers()
-
-        # Set face state to THINKING
-        try:
-            from desktop_app.face_widget import get_jarvis_state, JarvisState
-            state_manager = get_jarvis_state()
-            state_manager.set_state(JarvisState.THINKING)
-            debug_log("face state set to THINKING (dispatch_query)", "voice")
-        except Exception as e:
-            debug_log(f"failed to set face state to THINKING: {e}", "voice")
-
-        # Import reply engine
-        from ..reply.engine import run_reply_engine
-        from ..daemon import query_lock
-
-        # Process the query (keep thinking tune playing during processing).
-        # Hold the shared voice+text query lock so a voice query and a text
-        # chat query cannot run the reply engine concurrently against the
-        # same dialogue memory. Voice blocks while a text query finishes
-        # rather than being dropped (see daemon.query_lock).
-        # The context of this turn is snapshotted before the engine runs, so the
-        # terminal events below cannot be re-stamped by a newer lease.
-        turn_context = (
-            turn_context if turn_context is not None else self._turn_context
-        )
-        try:
-            if _e2e_diagnostic_mode():
-                # Env-gated hardware diagnostic. The microphone, the VAD state
-                # machine and Whisper all ran for real above; only the LLM step
-                # is replaced here, by one fixed text, so the transport leg can
-                # be measured without the model's own latency. The reply still
-                # goes through the real TTS, the real WAV server and the real
-                # playback on the satellite.
-                reply = DIAGNOSTIC_REPLY_TEXT
-                self.metrics["last_reply_source"] = REPLY_SOURCE_DIAGNOSTIC
-                debug_log(
-                    f"diagnostic reply_source=diagnostic for query='{query}'",
-                    "voice",
+        # Deterministic presence mode commands first (§5): recognized
+        # aliases transition the state machine without an LLM round-trip.
+        from ..presence import match_mode_command
+        _mode = match_mode_command(query)
+        if _mode is not None:
+            self.presence_coordinator.transition_to(_mode, {"reason": "user_command"})
+            _label = self.presence_coordinator.get_state().label
+            debug_log(
+                f"presence mode command matched: {_mode.value} (label={_label})",
+                "presence",
+            )
+            if self.tts and getattr(self.tts, "enabled", False):
+                self.tts.interrupt()
+                self.tts.clear_queue()
+                self.tts.speak(
+                    _label, language=self._last_detected_language
                 )
-            else:
-                with query_lock():
-                    reply = run_reply_engine(
-                        self.db, self.cfg, None, query, self.dialogue_memory,
-                        language=self._last_detected_language,
+            return
+        self.presence_coordinator.on_conversation_started()
+
+        # Reply-generation gate: while an LLM reply is being generated, a new
+        # STT turn must NOT interrupt it. Consecutive Voice PE STT results
+        # (including empty/noise from a reopened continued-conversation mic)
+        # would otherwise reach this point, interrupt the TTS and re-enter the
+        # reply engine, cutting the in-flight reply short. Queue the newest
+        # turn instead and let the running reply finish; the queued turn is
+        # drained below when generation completes. Genuine barge-in still works
+        # because the queue always keeps the NEWEST turn.
+        with self._reply_gate_lock:
+            if self._reply_in_flight.is_set():
+                self._queued_turn = (query, turn_context)
+                debug_log(
+                    f"reply in flight; queued newest turn '{query[:40]}' "
+                    "(barge-in deferred, no interrupt)", "voice")
+                return
+            self._reply_in_flight.set()
+
+        # The reply gate is held for the whole generation+TTS setup below and
+        # released in the finally at the end of the function (all paths:
+        # success, reply-engine error return, proactive tail).
+        try:
+            debug_log(f"dispatching query: '{query}'", "voice")
+            # The query of the most recent dispatch, for the STT record's trail.
+            self.metrics["last_dispatched_query"] = query
+
+            # Clear audio buffers to prevent stale audio from next query
+            self._clear_audio_buffers()
+
+            # Barge-in: if we are dispatching a new query, interrupt any ongoing TTS
+            # and clear the queue to prevent stale segments from playing.
+            if self.tts:
+                self.tts.interrupt()
+                self.tts.clear_queue()
+
+            # Set face state to THINKING
+            try:
+                from desktop_app.face_widget import get_jarvis_state, JarvisState
+                state_manager = get_jarvis_state()
+                state_manager.set_state(JarvisState.THINKING)
+                debug_log("face state set to THINKING (dispatch_query)", "voice")
+            except Exception as e:
+                debug_log(f"failed to set face state to THINKING: {e}", "voice")
+
+            # Import reply engine
+            from ..reply.engine import run_reply_engine
+            from ..daemon import query_lock
+
+            # Process the query (keep thinking tune playing during processing).
+            # Hold the shared voice+text query lock so a voice query and a text
+            # chat query cannot run the reply engine concurrently against the
+            # same dialogue memory. Voice blocks while a text query finishes
+            # rather than being dropped (see daemon.query_lock).
+            # The context of this turn is snapshotted before the engine runs, so the
+            # terminal events below cannot be re-stamped by a newer lease.
+            turn_context = (
+                turn_context if turn_context is not None else self._turn_context
+            )
+            try:
+                if _e2e_diagnostic_mode():
+                    # Env-gated hardware diagnostic. The microphone, the VAD state
+                    # machine and Whisper all ran for real above; only the LLM step
+                    # is replaced here, by one fixed text, so the transport leg can
+                    # be measured without the model's own latency. The reply still
+                    # goes through the real TTS, the real WAV server and the real
+                    # playback on the satellite.
+                    reply = DIAGNOSTIC_REPLY_TEXT
+                    self.metrics["last_reply_source"] = REPLY_SOURCE_DIAGNOSTIC
+                    debug_log(
+                        f"diagnostic reply_source=diagnostic for query='{query}'",
+                        "voice",
                     )
-                self.metrics["last_reply_source"] = REPLY_SOURCE_LLM
-        except Exception as e:
-            # Log the error visibly - this should never happen silently
-            print(f"\n  ⌌ Reply engine error: {e}", flush=True)
-            debug_log(f"reply engine exception: {e}", "voice")
-            self._voice_pe_event("error", f"reply_engine|{e}", token=turn_context)
-            self._stop_thinking_tune()
-            # Provide user feedback via TTS, but only where the local speaker is
-            # the output of this turn: the satellite got ERROR + RUN_END above.
-            if (
-                self.tts
-                and self.tts.enabled
-                and self._turn_source != AUDIO_SOURCE_VOICE_PE
-            ):
-                self.tts.speak("Sorry, I encountered an error processing your request.",
-                               language=self._last_detected_language)
+                else:
+                    with query_lock():
+                        reply = run_reply_engine(
+                            self.db, self.cfg, None, query, self.dialogue_memory,
+                            language=self._last_detected_language,
+                        )
+                    self.metrics["last_reply_source"] = REPLY_SOURCE_LLM
+            except Exception as e:
+                # Log the error visibly - this should never happen silently
+                print(f"\n  ⌌ Reply engine error: {e}", flush=True)
+                debug_log(f"reply engine exception: {e}", "voice")
+                self._voice_pe_event("error", f"reply_engine|{e}", token=turn_context)
+                self._stop_thinking_tune()
+                # Provide user feedback via TTS, but only where the local speaker is
+                # the output of this turn: the satellite got ERROR + RUN_END above.
+                if (
+                    self.tts
+                    and self.tts.enabled
+                    and self._turn_source != AUDIO_SOURCE_VOICE_PE
+                ):
+                    self.tts.speak("Sorry, I encountered an error processing your request.",
+                                   language=self._last_detected_language)
+                if turn_context is self._turn_context:
+                    self._turn_context = None
+                self._flash_face_error()
+                return
+
+            # Satellite milestone: the agent produced the reply text. Voice PE and
+            # the Windows default output are independent sinks: a stale/closed
+            # satellite generation must never suppress audible local feedback.
+            self._voice_pe_event("reply", reply or "", token=turn_context)
+            satellite_reply = self._turn_source == AUDIO_SOURCE_VOICE_PE
             if turn_context is self._turn_context:
                 self._turn_context = None
-            self._flash_face_error()
-            return
-
-        # Satellite milestone: the agent produced the reply text. Voice PE and
-        # the Windows default output are independent sinks: a stale/closed
-        # satellite generation must never suppress audible local feedback.
-        self._voice_pe_event("reply", reply or "", token=turn_context)
-        satellite_reply = self._turn_source == AUDIO_SOURCE_VOICE_PE
-        if turn_context is self._turn_context:
-            self._turn_context = None
 
 
-        # Handle TTS with proper callbacks
-        if reply and self.tts and self.tts.enabled:
-            # Stop thinking tune when TTS starts
-            self._stop_thinking_tune()
-            # Success pop right after generation, before speech begins.
-            self._flash_face_success()
-
-            if satellite_reply:
-                # Satellite turn: the WAV is queued for the Voice PE (LAN URL in
-                # TTS_END / announce media_id). The Windows default output is an
-                # independent sink and speaks the same text in parallel, so the
-                # user hears the reply either way. The hot window below stays
-                # closed: the satellite mic owns the next turn of this run.
-                print("  🔊 Audio queued: Voice PE + Windows default", flush=True)
-
-            # TTS completion callback for hot window
-            def _on_tts_complete():
-                import time as _time
-                debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
-                # Voice PE owns its continued-conversation lifecycle. Opening a
-                # second local hot window after the mirrored Windows playback
-                # would let two microphones race for the next turn.
-                if not satellite_reply:
-                    self.activate_hot_window()
-
-            # Duration callback to update echo detector with exact timing (Piper only)
-            def _on_duration_known(duration: float):
-                debug_log(f"TTS exact duration: {duration:.2f}s", "voice")
-                if self.echo_detector:
-                    self.echo_detector._tts_exact_duration = duration
-
-            # Track TTS start for echo detection with actual text
-            self.track_tts_start(reply)
-            debug_log(
-                f"starting TTS for reply ({len(reply)} chars, output=windows)",
-                "voice",
-            )
-
-            self.tts.speak(reply, completion_callback=_on_tts_complete,
-                           duration_callback=_on_duration_known,
-                           language=self._last_detected_language)
-        else:
-            debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
-            # Stop thinking tune if no TTS response
-            self._stop_thinking_tune()
-            if reply:
+            # Handle TTS with proper callbacks
+            if reply and self.tts and self.tts.enabled:
+                # Stop thinking tune when TTS starts
+                self._stop_thinking_tune()
+                # Success pop right after generation, before speech begins.
                 self._flash_face_success()
-            else:
-                self._flash_face_error()
 
-        # Proactive service: this turn answers any pending unsolicited remark
-        # and may itself be a direct suppression command; then record the
-        # completed tool action so the policy decides on a follow-up remark
-        # (proactive.spec.md).
-        from ..daemon import _global_proactive_service
-        if _global_proactive_service is not None:
-            try:
-                import time as _time
-                _global_proactive_service.mark_user_response()
-                _global_proactive_service.apply_directive(query)
-                remark = _global_proactive_service.handle_event({
-                    "type": "tool.completed",
-                    "timestamp": _time.time(),
-                    "context": {"tool": "reply", "success": bool(reply)},
-                })
-                if remark and self.tts and getattr(self.tts, "enabled", False):
-                    self.tts.speak(remark, language=self._last_detected_language)
-            except Exception as e:
-                debug_log(f"proactive listener-feed error (non-fatal): {e}", "voice")
+                if satellite_reply:
+                    # Satellite turn: the WAV is queued for the Voice PE (LAN URL in
+                    # TTS_END / announce media_id). The Windows default output is an
+                    # independent sink and speaks the same text in parallel, so the
+                    # user hears the reply either way. The hot window below stays
+                    # closed: the satellite mic owns the next turn of this run.
+                    print("  🔊 Audio queued: Voice PE + Windows default", flush=True)
+
+                # TTS completion callback for hot window
+                def _on_tts_complete():
+                    import time as _time
+                    debug_log(f"TTS completion callback triggered at {_time.time():.3f}", "voice")
+                    # Voice PE owns its continued-conversation lifecycle. Opening a
+                    # second local hot window after the mirrored Windows playback
+                    # would let two microphones race for the next turn.
+                    if not satellite_reply:
+                        self.activate_hot_window()
+
+                # Duration callback to update echo detector with exact timing (Piper only)
+                def _on_duration_known(duration: float):
+                    debug_log(f"TTS exact duration: {duration:.2f}s", "voice")
+                    if self.echo_detector:
+                        self.echo_detector._tts_exact_duration = duration
+
+                # Track TTS start for echo detection with actual text
+                self.track_tts_start(reply)
+                debug_log(
+                    f"starting TTS for reply ({len(reply)} chars, output=windows)",
+                    "voice",
+                )
+
+                self.tts.speak(reply, completion_callback=_on_tts_complete,
+                               duration_callback=_on_duration_known,
+                               language=self._last_detected_language)
+            else:
+                debug_log(f"no TTS output: reply={bool(reply)}, tts={bool(self.tts)}, enabled={getattr(self.tts, 'enabled', False) if self.tts else False}", "voice")
+                # Stop thinking tune if no TTS response
+                self._stop_thinking_tune()
+                if reply:
+                    self._flash_face_success()
+                else:
+                    self._flash_face_error()
+
+            # Proactive service: this turn answers any pending unsolicited remark
+            # and may itself be a direct suppression command; then record the
+            # completed tool action so the policy decides on a follow-up remark
+            # (proactive.spec.md).
+            from ..daemon import _global_proactive_service
+            if _global_proactive_service is not None:
+                try:
+                    import time as _time
+                    _global_proactive_service.mark_user_response()
+                    _global_proactive_service.apply_directive(query)
+                    remark = _global_proactive_service.handle_event({
+                        "type": "tool.completed",
+                        "timestamp": _time.time(),
+                        "context": {"tool": "reply", "success": bool(reply)},
+                    })
+                    if remark and self.tts and getattr(self.tts, "enabled", False):
+                        self.tts.speak(remark, language=self._last_detected_language)
+                except Exception as e:
+                    debug_log(f"proactive listener-feed error (non-fatal): {e}", "voice")
+        finally:
+            self._release_reply_gate()
+
+    def _release_reply_gate(self) -> None:
+        """Clear the in-flight flag and drain the newest queued turn.
+
+        Runs on every exit path of ``_dispatch_query`` (success, error,
+        early return) via the try/finally around the generation block. The
+        queued turn is dispatched on a fresh thread so the current (possibly
+        audio-callback) thread returns promptly.
+        """
+        queued = None
+        with self._reply_gate_lock:
+            self._reply_in_flight.clear()
+            queued = self._queued_turn
+            self._queued_turn = None
+        if queued is not None:
+            q, ctx = queued
+            debug_log(
+                f"reply gate drained: dispatching queued turn '{q[:40]}'",
+                "voice")
+            threading.Thread(
+                target=self._dispatch_query,
+                args=(q, ctx),
+                name="reply-gate-drain",
+                daemon=True,
+            ).start()
 
     def _flash_face_success(self) -> None:
         """One-shot success pop on the toaster (then rest at LISTENING-ish)."""
@@ -2549,8 +2711,15 @@ class VoiceListener(threading.Thread):
                 per_code[code] = rows
                 avg_logprob = self._first_row_stat(rows, "avg_logprob")
                 no_speech = self._first_row_stat(rows, "no_speech_prob")
+                # A hallucinated outro ("Cảm ơn các bạn…" etc.) carries a
+                # deceptively high logprob on near-silence, so it would win the
+                # multiselect on noise. Penalize a boilerplate candidate so a
+                # real language wins instead.
+                text = "".join(getattr(r, "text", "") for r in rows)
+                is_boilerplate = _is_whisper_boilerplate(text)
                 stats[code] = (
-                    -9.9 if avg_logprob is None else avg_logprob,
+                    (-99.0 if is_boilerplate else
+                     (-9.9 if avg_logprob is None else avg_logprob)),
                     1.0 if no_speech is None else no_speech,
                 )
         winner, runner_up, score_table = self._multiselect_rank(stats)
@@ -2590,6 +2759,65 @@ class VoiceListener(threading.Thread):
                 )
         winner, runner_up, score_table = self._multiselect_rank(stats)
         return per_code[winner], winner, runner_up, score_table
+
+    def _multiselect_openvino(
+        self, audio, candidates: list[str]
+    ) -> tuple[list, Optional[str], Optional[str], list[tuple[str, float]]]:
+        """OpenVINO twin of the closed-set contract, with strict metrics.
+
+        One forced decode per candidate code over the same preprocessed
+        audio, identical model/precision/decoding policy/score semantics for
+        both passes, validated first-row statistics, and the existing ranking
+        policy (highest ``avg_logprob``, then lower ``no_speech_prob``, then
+        the code for deterministic ties). A genuine pair failure is a
+        structured error, not a silent single-pass fallback.
+        """
+        from .openvino_runtime import OVWhisperError
+
+        try:
+            _winner, per_code = self.model.pair_transcribe(audio, candidates)
+        except OVWhisperError as exc:
+            self._report_openvino_error(exc)
+            return [], None, None, []
+        stats: dict[str, tuple[float, float]] = {}
+        rows_by_code: dict[str, list] = {}
+        for code, (rows, _info) in per_code.items():
+            rows_by_code[code] = rows
+            stats[code] = (rows[0].avg_logprob, rows[0].no_speech_prob)
+        winner, runner_up, score_table = self._multiselect_rank(stats)
+        return rows_by_code[winner], winner, runner_up, score_table
+
+    def _report_openvino_error(self, exc: Any) -> None:
+        """Print one actionable message per state change for a pair/metrics
+        failure and leave the language fields unset (no silent winner)."""
+        code = getattr(exc, "code", "OV_WHISPER_METRICS_UNAVAILABLE")
+        if getattr(self, "_last_openvino_error", None) == code:
+            debug_log(f"openvino error persists: {code}", "voice")
+            return
+        self._last_openvino_error = code
+        if code == "OV_WHISPER_PAIR_UNSUPPORTED":
+            print(
+                "  ⚠️  OpenVINO: režim cs+vi není v této konfiguraci podporován. "
+                "V Nastavení zvolte Čeština (cs) nebo Vietnamština (vi). "
+                "Jazyk nebyl automaticky změněn.",
+                flush=True,
+            )
+        else:
+            print(
+                "  ⚠️  OpenVINO neposkytuje požadované avg_logprob a no_speech_prob. "
+                "Filtry halucinací nelze zachovat; rozpoznávání je zablokováno. "
+                "Je potřeba kompatibilní GenAI rozšíření nebo ruční výběr jiného backendu.",
+                flush=True,
+            )
+        detail = getattr(exc, "detail", "") or str(exc)
+        debug_log(
+            f"openvino error {code}: {detail} "
+            f"(model={getattr(self.cfg, 'whisper_model', '?')}, "
+            f"precision={getattr(self.cfg, 'whisper_openvino_precision', '?')}, "
+            f"device={getattr(self.cfg, 'whisper_openvino_device', '?')}, "
+            f"semantics={getattr(self.model, 'score_semantics', '?')})",
+            "voice",
+        )
 
     def _spellcheck_protected_terms(self) -> frozenset[str]:
         """Terms the spell-checker must keep verbatim, as casefolded strings.
@@ -2650,6 +2878,14 @@ class VoiceListener(threading.Thread):
             "toastováč",
             "toastovači",
             "toastováči",
+            # Whisper's common vowel-drop stem: it hears the unstressed
+            # ``oa``/``ou`` as ``o`` and emits ``tost-``. These must map to
+            # the canonical wake word instead of falling through to Hunspell,
+            # which rewrites ``tostovač`` to the wrong stem.
+            "tostovač",
+            "tostováč",
+            "tostovači",
+            "tostováči",
         }
         aliases.update(str(a) for a in getattr(self.cfg, "wake_aliases", []) or [])
         aliases.update(str(a) for a in BRANDING.get("wake_words", []) or [])
@@ -2845,10 +3081,15 @@ class VoiceListener(threading.Thread):
             query, turn_context = self.state_manager.clear_pending()
             if query.strip():
                 self._dispatch_query(query, turn_context)
+            elif self.presence_coordinator.get_state().mode == PresenceMode.ADDRESSED:
+                # Collection timed out without a query. If we were in ADDRESSED mode,
+                # go back to PASSIVE.
+                self.presence_coordinator.on_user_idle_detected()
 
         # Also check hot window expiry - this ensures the timeout is enforced
         # even when there's no audio being processed
-        self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+        if self.state_manager.check_hot_window_expiry(self.cfg.voice_debug):
+            self.presence_coordinator.on_conversation_ended()
 
     def _on_audio(self, indata, frames, time_info, status):
         """Audio callback from sounddevice or the native bridge pumps."""
@@ -2974,6 +3215,11 @@ class VoiceListener(threading.Thread):
         if backend_pref == "faster-whisper":
             return "faster-whisper"
 
+        # Explicit OpenVINO branch, ahead of the old automatic selection so an
+        # existing ``auto`` configuration never opts into it implicitly.
+        if backend_pref == "openvino":
+            return "openvino"
+
         # Auto mode: prefer MLX on Apple Silicon
         if MLX_WHISPER_AVAILABLE and _is_apple_silicon():
             return "mlx"
@@ -3026,6 +3272,173 @@ class VoiceListener(threading.Thread):
         suffix = f" ({context})" if context else ""
         print(f"     🎤 Whisper '{model_name}' loaded on {resolved_device}{suffix}", flush=True)
         return resolved_device
+
+    def _init_openvino_backend(self, model_name: str) -> bool:
+        """Bring up the isolated OpenVINO worker and load the selected IR.
+
+        Discovery, import, device enumeration and compilation are separate
+        reported stages; a failed stage leaves an actionable error code and
+        never falls back silently to another backend.
+        """
+        from . import openvino_models as _ov_models
+        from .openvino_runtime import (
+            EXPECTED_CORE_BUILD,
+            GENAI_SOURCE_COMMIT,
+            OV_NPU_UNAVAILABLE,
+            OVWhisperError,
+            OVSpeechWorker,
+        )
+        from .openvino_whisper import OpenVinoWhisperAdapter
+
+        precision = str(getattr(self.cfg, "whisper_openvino_precision", "int8") or "int8")
+        device = str(getattr(self.cfg, "whisper_openvino_device", "NPU") or "NPU")
+        pipeline_mode = str(getattr(self.cfg, "whisper_openvino_pipeline", "stateful") or "stateful").lower()
+        if pipeline_mode not in ("stateful", "static"):
+            print(f"  ⚠️  OpenVINO: pipeline='{pipeline_mode}' is invalid (OV_DECODE_POLICY_UNSUPPORTED); using 'stateful'", flush=True)
+            pipeline_mode = "stateful"
+        self._ov_health = "INITIALIZING"
+        cache_root = str(getattr(self.cfg, "whisper_cache_dir", "") or "").strip()
+        entry = _ov_models.catalog_entry(model_name, precision)
+        if entry is None:
+            print(f"  ❌ OpenVINO: model/precision '{model_name}'/{precision} is not in the catalog (OV_MODEL_INCOMPLETE)", flush=True)
+            return False
+        repo_id, revision, _total = entry
+        print(
+            f"     🎤 OpenVINO '{model_name}' ({precision}) — {repo_id}@{revision[:12]}",
+            flush=True,
+        )
+
+        model_dir = _ov_models.resolve_model_dir(cache_root, model_name, precision) if cache_root else ""
+        if not model_dir:
+            def _progress(done: int, total: int) -> None:
+                print(f"     ⬇️  {done}/{total} assets", flush=True)
+
+            result = _ov_models.download_model(model_name, precision, cache_root, progress_cb=_progress)
+            if not result["ok"]:
+                print(f"  ❌ OpenVINO model download failed ({result['code']}): {result['error']}", flush=True)
+                return False
+            model_dir = result["dir"]
+        debug_log(f"openvino model dir: {model_dir}", "voice")
+
+        try:
+            worker = OVSpeechWorker(self.cfg)
+        except OVWhisperError as exc:
+            print(f"  ❌ OpenVINO runtime: {exc}", flush=True)
+            return False
+
+        try:
+            handshake = worker.request({"op": "handshake"}, timeout=60.0)
+            worker.validate_identity(handshake, device=device, pipeline_mode=pipeline_mode)
+        except OVWhisperError as exc:
+            print(f"  ❌ OpenVINO handshake: {exc}", flush=True)
+            self._ov_health = "FAILED"
+            worker.close()
+            return False
+
+        core_version = str(handshake.get("core_version", ""))
+        genai_version = str(handshake.get("genai_version", ""))
+        npu = handshake.get("npu")
+        semantics = str(handshake.get("score_semantics", "") or "")
+        print(
+            f"     🧩 Core {core_version or '-'} (expected {EXPECTED_CORE_BUILD}) · "
+            f"GenAI {genai_version or '-'}@{handshake.get('genai_commit', GENAI_SOURCE_COMMIT)} · "
+            f"Python {handshake.get('python', '-')} ({handshake.get('abi', '-')})",
+            flush=True,
+        )
+        if core_version and not core_version.startswith(EXPECTED_CORE_BUILD):
+            print(
+                f"     ⚠️  Loaded Core {core_version} differs from the selected manifest "
+                f"{EXPECTED_CORE_BUILD} (OV_RUNTIME_VERSION_MISMATCH)",
+                flush=True,
+            )
+        print(f"     🖥️  Devices: {', '.join(handshake.get('devices') or ['-'])} · selected: {device}", flush=True)
+        if device.upper().startswith("NPU") and not npu:
+            print("  ❌ OpenVINO: NPU is not among the runtime devices (OV_NPU_UNAVAILABLE); no hidden CPU fallback", flush=True)
+            worker.close()
+            return False
+
+        no_speech_id = _ov_models.no_speech_token_id(model_dir)
+        try:
+            load = worker.request(
+                {
+                    "op": "load",
+                    "model_dir": model_dir,
+                    "precision": precision,
+                    "device": device,
+                    "pipeline": pipeline_mode,
+                    "no_speech_token_id": no_speech_id,
+                },
+                timeout=600.0,
+            )
+        except OVWhisperError as exc:
+            print(f"  ❌ OpenVINO pipeline load: {exc}", flush=True)
+            self._ov_health = "FAILED"
+            worker.close()
+            return False
+
+        adapter = OpenVinoWhisperAdapter(worker, score_semantics=semantics, npu=npu)
+        self.model = adapter
+        self._whisper_backend = "openvino"
+        self._whisper_device = device.lower()
+        self._asr_version = f"core {core_version or '-'} + genai {genai_version or '-'}@{handshake.get('genai_commit', GENAI_SOURCE_COMMIT)}"
+        self._ov_worker = worker
+        self._transcribe_kwargs = {}
+        self._ov_last_request_id = 0
+        # Effective production configuration after resolution.
+        print(
+            f"     ⚙️  OpenVINO effective: device={device} pipeline={pipeline_mode} "
+            f"num_beams=1 semantics={semantics or '-'} "
+            f"python={handshake.get('python_executable', '-')} "
+            f"genai_file={handshake.get('genai_file', '-')}",
+            flush=True,
+        )
+        debug_log(
+            f"openvino initialised: model={model_name}, precision={precision}, "
+            f"device={device}, pipeline={pipeline_mode}, revision={revision[:12]}, "
+            f"core={core_version}, genai={genai_version}, semantics={semantics or '-'}, "
+            f"python={handshake.get('python_executable', '-')}, "
+            f"genai_file={handshake.get('genai_file', '-')}, "
+            f"dist={handshake.get('dist_versions', {})}, "
+            f"load_ms={load.get('load_ms', '-')}, first_compile={load.get('first_compile', '-')}",
+            "voice",
+        )
+
+        # Warm the loaded pipeline once (low-amplitude noise, same contract as
+        # the other backends) so the first real utterance is not cold.
+        self._ov_health = "DEGRADED"
+        if np is not None:
+            try:
+                rng = np.random.default_rng(0)
+                warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
+                with self.transcribe_lock:
+                    adapter.transcribe(warmup_audio, language=self._whisper_language_code())
+                debug_log("openvino warmup transcription complete", "voice")
+                self._ov_health = "READY"
+            except OVWhisperError as exc:
+                self._report_openvino_error(exc)
+            except Exception as exc:
+                debug_log(f"openvino warmup failed: {exc}", "voice")
+        else:
+            # No numpy: the lane is up but unproven; keep it visible.
+            self._ov_health = "READY"
+
+        print(
+            f"     🎤 Whisper '{model_name}' loaded on {device} "
+            f"(openvino, {precision}, {pipeline_mode}, {load.get('load_ms', 0):.0f} ms)",
+            flush=True,
+        )
+        return True
+
+    def whisper_lane_health(self) -> str:
+        """Small health state of the OpenVINO Whisper lane.
+
+        ``READY`` requires: the intended interpreter/package pair loaded, NPU
+        visible, model compiled, greedy decoding, compatible score semantics
+        and a completed warm-up decode. Not a platform-wide framework.
+        """
+        if self._whisper_backend != "openvino":
+            return "INITIALIZING" if self.model is None else "READY"
+        return getattr(self, "_ov_health", "INITIALIZING")
 
     def _start_llm_warmup(self) -> list[threading.Thread]:
         """Pre-load chat and intent judge models via the active backend.
@@ -3328,8 +3741,10 @@ class VoiceListener(threading.Thread):
         self._whisper_backend = self._determine_whisper_backend()
         model_name = getattr(self.cfg, "whisper_model", "small")
 
-        # Validate large-v3-turbo support for faster-whisper backend
-        if model_name == "large-v3-turbo" and self._whisper_backend != "mlx":
+        # Validate large-v3-turbo support for the faster-whisper backend only:
+        # MLX always supports it, and the OpenVINO IR catalog ships the turbo
+        # artifacts independently of the old faster-whisper version gate.
+        if model_name == "large-v3-turbo" and self._whisper_backend == "faster-whisper":
             if not _is_faster_whisper_turbo_supported():
                 debug_log(
                     "faster-whisper does not support large-v3-turbo, "
@@ -3341,8 +3756,13 @@ class VoiceListener(threading.Thread):
                 )
                 model_name = "large-v3"
 
+        if self._whisper_backend == "openvino":
+            if not self._init_openvino_backend(model_name):
+                return
+
         # Local-first: resolve pre-placed HF snapshots from the configured
-        # cache root (preflight host: D:\_MODELS), skipping hub ETags.
+        # cache root (preflight host: D:\_MODELS), skipping hub ETags. The
+        # OpenVINO IR models resolve through their own manifest instead.
         _download_root = (getattr(self.cfg, "whisper_cache_dir", "") or "").strip() or None
 
         def _resolve_local(path_root: str, size_name: str) -> str:
@@ -3366,7 +3786,7 @@ class VoiceListener(threading.Thread):
                 debug_log(f"local whisper snapshot resolve failed: {exc}", "voice")
             return ""
 
-        if _download_root and model_name:
+        if _download_root and model_name and self._whisper_backend != "openvino":
             _local_path = _resolve_local(_download_root, model_name)
             if _local_path:
                 debug_log(f"using pre-placed Whisper snapshot from cache: {_local_path}", "voice")
@@ -4489,10 +4909,18 @@ class VoiceListener(threading.Thread):
             "voice",
         )
         if resolved != "success":
-            # Exactly one terminal milestone per started run: the success path
-            # already sent ``transcript`` inside ``_process_transcript``.
-            reason = str(record.get("reason") or record.get("raw_transcript") or "")
-            self._voice_pe_event("error", f"{resolved}|{reason}")
+            # Exactly one terminal milestone per started SATELLITE run: the
+            # success path already sent ``transcript`` inside
+            # ``_process_transcript``. A filtered local-microphone result (no
+            # speech, echo, too short) is NOT a satellite error — firing the
+            # error milestone on a local turn produced spurious all-None
+            # ``voice_pe milestone error`` lines and confused the device state
+            # machine. Only a turn that actually came from the satellite
+            # carries a turn context worth reporting.
+            if str(source) == AUDIO_SOURCE_VOICE_PE:
+                reason = str(
+                    record.get("reason") or record.get("raw_transcript") or "")
+                self._voice_pe_event("error", f"{resolved}|{reason}")
 
     def _clear_stream_input_buffers(self, stream) -> None:
         """Drop this utterance's own input blocks before the decoder sees the clip.
@@ -4520,6 +4948,80 @@ class VoiceListener(threading.Thread):
                 pre_roll.clear()
         except Exception:
             pass
+
+    def _redecode_utterance(
+        self,
+        audio,
+        *,
+        language: str,
+        strategy: str,
+        attempt: int = 1,
+    ) -> tuple[list, Optional[float], Optional[float]]:
+        """Re-invoke Whisper on the SAME retained audio with a different strategy.
+
+        This is the real re-decode: no re-recording, no reconstruction from
+        text, and the LLM recovery text is never used as audio evidence. Only
+        the faster-whisper backend supports the extra decode knobs
+        (``beam_size`` / ``temperature`` / ``best_of``); MLX and OpenVINO do not
+        expose them, so they report an empty result and the caller treats the
+        re-decode as failed rather than admitting the original.
+
+        Returns ``(segments_list, avg_logprob, no_speech_prob)`` — empty list on
+        an unsupported backend or a decode failure.
+        """
+        if audio is None or self._whisper_backend != "faster-whisper":
+            debug_log(
+                f"redecode: backend={self._whisper_backend} does not support "
+                "re-decode knobs; cannot run a meaningful second decode",
+                "grammar",
+            )
+            return [], None, None
+
+        # Start from the resolved decode contract, then vary it meaningfully.
+        kwargs = dict(self._transcribe_kwargs)
+        if strategy == "alternate_beam":
+            kwargs["beam_size"] = 5
+            kwargs["best_of"] = 5
+            kwargs["patience"] = 1.5
+        elif strategy == "temperature_fallback":
+            # A small non-zero temperature escapes a deterministic stuck decode;
+            # beam search still dominates so the result stays grounded.
+            kwargs["beam_size"] = 5
+            kwargs["temperature"] = [0.0, 0.2, 0.4]
+            kwargs["best_of"] = 5
+        elif strategy == "recovery_hinted":
+            # Constrained by the same language, wider beam; the recovery text is
+            # NOT injected as a prompt (it is not audio evidence).
+            kwargs["beam_size"] = 8
+            kwargs["best_of"] = 8
+            kwargs["patience"] = 2.0
+
+        # Filter the kwargs to what this faster-whisper install accepts.
+        kwargs, _ = _resolve_transcribe_kwargs(
+            getattr(self.model, "transcribe", None), kwargs
+        )
+
+        try:
+            with self.transcribe_lock:
+                segments, _info = self.model.transcribe(
+                    audio, language=(language or None), **kwargs
+                )
+                rows = list(segments)
+        except Exception as exc:
+            debug_log(
+                f"redecode: decode failed (strategy={strategy}): {type(exc).__name__}: {exc}",
+                "grammar",
+            )
+            return [], None, None
+
+        avg_logprob = self._first_row_stat(rows, "avg_logprob")
+        no_speech = self._first_row_stat(rows, "no_speech_prob")
+        debug_log(
+            f"redecode: strategy={strategy} attempt={attempt} lang={language} "
+            f"rows={len(rows)} avg_logprob={avg_logprob} no_speech={no_speech}",
+            "grammar",
+        )
+        return rows, avg_logprob, no_speech
 
     def _transcribe_utterance(
         self, utterance_source, utterance_stream, utterance_state
@@ -4925,6 +5427,99 @@ class VoiceListener(threading.Thread):
                     raw=raw_audio,
                     pre=pre_meta,
                 )
+            elif self._whisper_backend == "openvino":
+                # OpenVINO IR transcription through the isolated worker. The
+                # adapter returns the same row shape; its rows carry the
+                # genuine ``avg_logprob`` / ``no_speech_prob`` validated at
+                # the adapter boundary, so the shared filter below sees real
+                # numbers on every path.
+                note = "openvino"
+                _candidates = (
+                    self._multiselect_candidates()
+                    if self._whisper_language_code() is None
+                    else []
+                )
+                if len(_candidates) >= 2:
+                    # Closed-set resolution: two forced decodes over the same
+                    # clip, real first-row scores select the winner.
+                    segments_list, _winner, _runner_up, _scores = (
+                        self._multiselect_openvino(audio, _candidates)
+                    )
+                    if _winner is None:
+                        # Structured pair/metrics failure: no winner, no
+                        # transcript, fields stay unset.
+                        self._decoder_language_argument = None
+                        self._reported_language = None
+                        self._language_source = None
+                        self._independent_detection = None
+                        self._multiselect_runner_up = None
+                        self._multiselect_scores = []
+                        self._dump_clip_diagnostic(
+                            audio,
+                            utterance_source,
+                            utterance_stream,
+                            utterance_start_time,
+                            utterance_end_time,
+                            [],
+                            "",
+                            note=f"openvino:{getattr(self, '_last_openvino_error', 'error')}",
+                            state=utterance_state,
+                            raw=raw_audio,
+                            pre=pre_meta,
+                        )
+                        return ("filtered", {"reason": str(getattr(self, "_last_openvino_error", "error"))})
+                    self._decoder_language_argument = _winner
+                    self._reported_language = _winner
+                    self._language_source = "multiselect"
+                    self._independent_detection = None
+                    self._multiselect_runner_up = _runner_up
+                    self._multiselect_scores = _scores
+                    self._last_detected_language = _winner
+                    note = "openvino:multiselect"
+                else:
+                    _language = self._whisper_language_code()
+                    with self.transcribe_lock:
+                        segments_list, _info = self.model.transcribe(audio, language=_language)
+                        self._ov_last_request_id = getattr(_info, "request_id", 0) or 0
+                    # The four independent language names, same as the other
+                    # backends: a forced code echoed by the backend is not an
+                    # independent detection.
+                    _reported = getattr(_info, "language", None)
+                    self._reported_language = _reported if isinstance(_reported, str) and _reported else None
+                    self._decoder_language_argument = _language
+                    if _language:
+                        self._language_source = "forced"
+                        detected = _language
+                    else:
+                        self._language_source = "auto"
+                        detected = self._reported_language
+                    self._last_detected_language = detected
+                filtered_segments = self._filter_noisy_segments(segments_list)
+                text = " ".join(seg.text for seg in filtered_segments).strip()
+                raw_rows = list(segments_list)
+                # KV-cache exhaustion is a distinct, actionable outcome: the
+                # text is truncated, never a plain success. The acoustic gate
+                # above keeps owning admission; this is decoder metadata only.
+                if any(getattr(seg, "kv_cache_exhausted", False) for seg in segments_list):
+                    note = f"{note}:kv_cache_exhausted"
+                    debug_log(
+                        "kv_cache_exhausted: window(s) reached the decoder KV capacity; "
+                        f"truncated text kept for forensics (len={len(text)})",
+                        "voice",
+                    )
+                self._dump_clip_diagnostic(
+                    audio,
+                    utterance_source,
+                    utterance_stream,
+                    utterance_start_time,
+                    utterance_end_time,
+                    segments_list,
+                    text,
+                    note=(note if filtered_segments else f"{note}:all_segments_filtered"),
+                    state=utterance_state,
+                    raw=raw_audio,
+                    pre=pre_meta,
+                )
             else:
                 # faster-whisper transcription. The decode options were resolved
                 # once for this installed backend at model-init time, so the
@@ -4960,6 +5555,20 @@ class VoiceListener(threading.Thread):
                     self._multiselect_runner_up = _runner_up
                     self._multiselect_scores = _scores
                     self._last_detected_language = _winner
+                    # Language evidence from the closed-set score table: the
+                    # winner's avg_logprob is its confidence; the runner-up
+                    # becomes the alternative so the confidence gate can see
+                    # a close cs/sk split as ambiguous.
+                    _win_lp = next(
+                        (lp for code, lp in _scores if code == _winner), 0.0
+                    )
+                    _win_prob = math.exp(min(0.0, _win_lp)) if _win_lp else 1.0
+                    self._last_language_probability = _win_prob
+                    self._last_language_logprob = min(0.0, _win_lp)
+                    self._last_all_language_probs = [
+                        (code, math.exp(min(0.0, lp)))
+                        for code, lp in _scores
+                    ]
                     note = "faster-whisper:multiselect"
                 else:
                     with self.transcribe_lock:
@@ -4977,6 +5586,24 @@ class VoiceListener(threading.Thread):
                     _reported = getattr(_info, "language", None)
                     self._reported_language = _reported if isinstance(_reported, str) and _reported else None
                     self._decoder_language_argument = _language
+                    # Whisper language-detection evidence for the grammar
+                    # pipeline: the winner's probability and the full
+                    # (code, prob) table from the language-token logprobs.
+                    _lp = getattr(_info, "language_probability", None)
+                    self._last_language_probability = (
+                        float(_lp) if isinstance(_lp, (int, float)) else 1.0
+                    )
+                    self._last_language_logprob = (
+                        math.log(self._last_language_probability)
+                        if self._last_language_probability > 0
+                        else 0.0
+                    )
+                    _allp = getattr(_info, "all_language_probs", None)
+                    self._last_all_language_probs = (
+                        [(str(c), float(p)) for c, p in _allp]
+                        if isinstance(_allp, (list, tuple))
+                        else []
+                    )
                     if _language:
                         self._language_source = "forced"
                         detected = _language
@@ -5174,6 +5801,100 @@ class VoiceListener(threading.Thread):
             print("   ✏️ Hunspell running: no error found", flush=True)
         elif bool(getattr(self.cfg, "speech_spellcheck_enabled", True)):
             print("   ⚠️ Hunspell skipped: dictionary/language unavailable", flush=True)
+
+        # Language-aware grammar validation + audio-retaining recovery (Gemma).
+        # Hunspell above is only a lexical feature fed in as evidence — it no
+        # longer decides validity. The retained clip (``audio``) is the trust
+        # root: a ``redecode`` runs a REAL second Whisper decode on the same PCM
+        # with a meaningfully different strategy, every candidate is re-grammared,
+        # and only an ACCEPTED_* final status reaches intent handling. An invalid
+        # or unrecoverable transcript returns "filtered" here and never reaches
+        # the intent judge.
+        if getattr(self, "_grammar_pipeline", None) is not None and self._grammar_pipeline.enabled:
+            from .grammar import TranscriptFinalStatus
+            from .grammar.contracts import LinguisticValidity
+
+            _g_lang = self._last_detected_language or self._whisper_language_code() or ""
+            _g_alts = [
+                {"language": code, "probability": prob, "logprob": (0.0 if prob <= 0 else math.log(prob))}
+                for code, prob in (self._last_all_language_probs[1:4] or [])
+            ]
+            _g_input = self._grammar_pipeline.build_input(
+                transcript=text,
+                language_code=_g_lang,
+                language_probability=self._last_language_probability,
+                language_logprob=self._last_language_logprob,
+                language_alternatives=_g_alts,
+                average_logprob=(
+                    float(segment["avg_logprob"]) if "avg_logprob" in segment else None
+                ),
+                no_speech_probability=(
+                    float(segment["no_speech_prob"]) if "no_speech_prob" in segment else None
+                ),
+                unknown_tokens=[t for t, _ in correction.replacements],
+                misspellings=len(correction.replacements),
+            )
+
+            # Pass 1: validate the initial transcript.
+            _g_grammar = self._grammar_pipeline.judge.judge(_g_input)
+            self._grammar_pipeline.metrics.record_grammar(_g_grammar)
+            from .grammar import GrammarEventLog
+            GrammarEventLog.grammar_result(
+                _g_grammar,
+                language_probability=_g_input.language.probability,
+                transcript=text,
+            )
+
+            # A judge failure never silently admits.
+            if _g_grammar.status != "ok":
+                debug_log(
+                    f"grammar: judge_failed status={_g_grammar.status} lang={_g_lang}; "
+                    f"not admitting transcript", "grammar",
+                )
+                segment["reason"] = "judge_failed"
+                self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+                return ("filtered", segment)
+
+            # NONSENSE / LIKELY_ASR_NOISE / MALFORMED never reach intent handling.
+            _g_validity = LinguisticValidity(_g_grammar.linguistic_validity)
+            _g_needs_recovery = (
+                _g_grammar.likely_asr_corruption
+                or _g_grammar.correction_type == "semantic"
+                or _g_validity.blocks_intent
+                or _g_grammar.recommendation in ("run_asr_recovery", "redecode")
+            )
+
+            if _g_grammar.valid and not _g_needs_recovery:
+                # Valid original; a safe surface correction is applied, else accept.
+                from .grammar import may_auto_correct
+                if may_auto_correct(
+                    _g_grammar,
+                    auto_correction_threshold=self._grammar_pipeline.auto_threshold,
+                ):
+                    print(f"   ✏️ Grammar fixed: \"{_g_grammar.corrected_text}\"", flush=True)
+                    text = _g_grammar.corrected_text
+            else:
+                # Run the real bounded recovery loop on the retained audio.
+                _g_outcome = self._grammar_pipeline.run_recovery(
+                    _g_input,
+                    audio=audio,
+                    initial_grammar=_g_grammar,
+                    initial_text=text,
+                    redecode_fn=self._redecode_utterance,
+                )
+                if not _g_outcome.admitted:
+                    # redecode_failed / rejected / needs_user_retry / judge_failed:
+                    # do NOT admit the invalid original to intent handling.
+                    debug_log(
+                        f"grammar: not admitted status={_g_outcome.status.value} "
+                        f"reason={_g_outcome.reason} text={text!r}", "grammar",
+                    )
+                    segment["reason"] = f"grammar_{_g_outcome.status.value}"
+                    self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+                    return ("filtered", segment)
+                if _g_outcome.text != text:
+                    print(f"   🔁 Recovered: \"{_g_outcome.text}\" ({_g_outcome.status.value})", flush=True)
+                    text = _g_outcome.text
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):

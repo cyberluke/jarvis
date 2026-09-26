@@ -1,13 +1,13 @@
-; Jarvis Inno Setup Script
+; Toastovac Inno Setup Script
 ; Builds a Windows installer from the PyInstaller onedir output.
 ;
 ; Usage:
 ;   iscc installer\windows\jarvis_setup.iss
 ;
-; Expects the PyInstaller onedir output at dist\Jarvis\
+; Expects the PyInstaller onedir output at dist\Toastovac\
 
-#define MyAppName "Jarvis"
-#define MyAppExeName "Jarvis.exe"
+#define MyAppName "Toastovac"
+#define MyAppExeName "Toastovac.exe"
 #define MyAppPublisher ""
 ; Version can be overridden via ISCC command line: /DMyAppVersion=1.2.3
 #ifndef MyAppVersion
@@ -26,7 +26,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\..\dist
-OutputBaseFilename=Jarvis-Setup-x64
+OutputBaseFilename=Toastovac-Setup-x64
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -45,7 +45,7 @@ Name: "cudalibs"; Description: "Download NVIDIA CUDA libraries for GPU-accelerat
 
 [Files]
 ; Bundle the entire PyInstaller onedir output
-Source: "..\..\dist\Jarvis\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\dist\Toastovac\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Bundle the CUDA installer script (PowerShell — no Python needed)
 Source: "install_cuda.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -107,7 +107,7 @@ begin
   begin
     Log('CUDA install marker not found at ' + MarkerPath + '; install failed.');
     MsgBox(
-      'GPU library download did not complete. Jarvis will run on CPU.' #13#10 #13#10 +
+      'GPU library download did not complete. Toastovac will run on CPU.' #13#10 #13#10 +
       'You can retry later from the tray menu via "Reinstall GPU libraries".' #13#10 #13#10 +
       'Details: ' + LogPath,
       mbInformation, MB_OK);

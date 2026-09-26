@@ -2,7 +2,7 @@
 REM Test script to build and run the bundled Windows app locally
 
 echo.
-echo === Building Jarvis Desktop App with PyInstaller ===
+echo === Building Toastovac Desktop App with PyInstaller ===
 echo.
 
 REM Get to project root
@@ -32,16 +32,16 @@ echo Building app bundle...
 "%MAMBA_ENV%\python.exe" -m PyInstaller jarvis_desktop.spec
 echo.
 
-REM Check if build succeeded
-if exist "dist\Jarvis.exe" (
+REM Check if build succeeded (onedir layout: dist\Toastovac\Toastovac.exe)
+if exist "dist\Toastovac\Toastovac.exe" (
     echo Build successful!
     echo.
-    echo App location: %cd%\dist\Jarvis.exe
+    echo App location: %cd%\dist\Toastovac\Toastovac.exe
     echo.
 
     REM Show file info
     echo File info:
-    dir dist\Jarvis.exe
+    dir dist\Toastovac\Toastovac.exe
     echo.
 
     REM Run the app
@@ -49,7 +49,7 @@ if exist "dist\Jarvis.exe" (
     echo    Press Ctrl+C in this window to stop the app
     echo.
 
-    dist\Jarvis.exe
+    dist\Toastovac\Toastovac.exe
 
     echo.
     echo App exited.

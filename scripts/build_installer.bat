@@ -1,7 +1,7 @@
 @echo off
-REM Build the Windows installer (Jarvis-Setup-x64.exe) for manual testing.
-REM PyInstaller produces dist\Jarvis\, then Inno Setup wraps that into the
-REM installer at dist\Jarvis-Setup-x64.exe. The resulting installer is the
+REM Build the Windows installer (Toastovac-Setup-x64.exe) for manual testing.
+REM PyInstaller produces dist\Toastovac\, then Inno Setup wraps that into the
+REM installer at dist\Toastovac-Setup-x64.exe. The resulting installer is the
 REM artefact CI ships, so manual runs of it exercise the same code paths
 REM as a real release including install_cuda.ps1 and the VerifyCudaInstall hook.
 
@@ -67,11 +67,31 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM ---- PyInstaller produces dist\Jarvis\.
+REM ---- Everywhere native host (dotnet publish). Auto-installs the .NET 10
+REM      SDK via winget when absent (fire-and-forget toolchain). The exe is
+REM      staged under build\everywhere_host so the spec bundles it.
+echo [build_installer] Building Everywhere native host...
+where dotnet >nul 2>nul
+if errorlevel 1 (
+    echo [build_installer] dotnet not on PATH - installing .NET 10 SDK via winget...
+    winget install Microsoft.DotNet.SDK.10 --accept-package-agreements --accept-source-agreements --disable-interactivity
+    if errorlevel 1 (
+        echo [build_installer] ERROR: winget .NET 10 SDK install failed
+        exit /b 1
+    )
+    set "PATH=%ProgramFiles%\dotnet;%PATH%"
+)
+dotnet publish "%PROJECT_ROOT%\native\Toastovac.Everywhere.Host\Toastovac.Everywhere.Host.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "%PROJECT_ROOT%\build\everywhere_host"
+if errorlevel 1 (
+    echo [build_installer] ERROR: dotnet publish failed
+    exit /b 1
+)
+
+REM ---- PyInstaller produces dist\Toastovac\.
 echo [build_installer] Running PyInstaller...
 "%MAMBA_ENV%\python.exe" -m PyInstaller jarvis_desktop.spec
-if not exist "dist\Jarvis\Jarvis.exe" (
-    echo [build_installer] ERROR: PyInstaller did not produce dist\Jarvis\Jarvis.exe
+if not exist "dist\Toastovac\Toastovac.exe" (
+    echo [build_installer] ERROR: PyInstaller did not produce dist\Toastovac\Toastovac.exe
     exit /b 1
 )
 
@@ -96,19 +116,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if not exist "dist\Jarvis-Setup-x64.exe" (
-    echo [build_installer] ERROR: Installer was not produced at dist\Jarvis-Setup-x64.exe
+if not exist "dist\Toastovac-Setup-x64.exe" (
+    echo [build_installer] ERROR: Installer was not produced at dist\Toastovac-Setup-x64.exe
     exit /b 1
 )
 
 echo.
 echo [build_installer] SUCCESS
-echo                   Installer:  %PROJECT_ROOT%\dist\Jarvis-Setup-x64.exe
-echo                   Frozen app: %PROJECT_ROOT%\dist\Jarvis\Jarvis.exe
+echo                   Installer:  %PROJECT_ROOT%\dist\Toastovac-Setup-x64.exe
+echo                   Frozen app: %PROJECT_ROOT%\dist\Toastovac\Toastovac.exe
 echo.
 echo [build_installer] To test the CUDA install flow, run the installer with the
 echo                   "Download NVIDIA CUDA libraries" task ticked, then check
-echo                   "%%LOCALAPPDATA%%\Programs\Jarvis\cuda\install.log".
+echo                   "%%LOCALAPPDATA%%\Programs\Toastovac\cuda\install.log".
 
 goto :eof
 

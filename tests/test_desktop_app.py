@@ -1564,7 +1564,7 @@ class TestDesktopSmokeTest:
 
         # The smoke test flag detection is a simple string check in sys.argv.
         # We test it by patching _smoke_test_main to verify it is called.
-        with patch("desktop_app.app.sys.argv", ["Jarvis.exe", "--smoke-test"]), \
+        with patch("desktop_app.app.sys.argv", ["Toastovac.exe", "--smoke-test"]), \
              patch("desktop_app.app._smoke_test_main", return_value=42) as mock_smoke:
 
             from desktop_app.app import main

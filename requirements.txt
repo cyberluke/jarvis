@@ -6,6 +6,13 @@ lxml>=4.9.0
 html2text>=2020.1.16
 playwright>=1.40.0
 numpy<2.0.0
+# ONNX Runtime for the vendored OneOCR engine + Piper TTS. Exactly ONE
+# distribution per build profile (no conflicting ORT wheels in one env):
+#   cpu -> onnxruntime; directml -> onnxruntime-directml;
+#   cuda -> onnxruntime-gpu; openvino -> openvino + onnxruntime.
+# The plain CPU wheel is the default; swap the line below for the GPU/DML
+# wheel when building that profile.
+onnxruntime>=1.17.0
 faster-whisper==1.0.3
 setuptools<81
 sounddevice==0.4.7

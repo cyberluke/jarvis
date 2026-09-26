@@ -74,6 +74,46 @@ DEFAULT_TTS_VOICE: str = "cs_CZ-jirka-medium"
 
 # The default chat model (first in the supported list)
 DEFAULT_CHAT_MODEL = "gemma4:e2b"
+
+# ── Everywhere (OS-wide interaction plane) default tables ───────────────
+# Single source of truth for the direct-action chords; the native host and
+# the Python broker both read this mapping. Every entry is overridable via
+# the ``everywhere_hotkeys`` config dict. Registration collisions are
+# surfaced by the host (HOTKEY_CONFLICT), never silently remapped.
+EVERYWHERE_DEFAULT_HOTKEYS: Dict[str, str] = {
+    "toolbar": "ctrl+shift+space",
+    "rewrite": "ctrl+shift+c",
+    "proofread": "ctrl+shift+h",
+    "alternatives": "ctrl+shift+l",
+    "explain": "ctrl+shift+x",
+    "translate": "ctrl+shift+t",
+    "prompt": "ctrl+shift+j",
+    "ocr": "alt+drag",
+    "help": "ctrl+/",
+    "cancel": "esc",
+}
+
+# Default per-action model profiles (everywhere/model_profiles maps the
+# names onto the two-tier router; no model ids hide in the implementation).
+EVERYWHERE_DEFAULT_PROFILES: Dict[str, str] = {
+    "rewrite": "fast-edit",
+    "proofread": "structured-edit",
+    "alternatives": "creative-edit",
+    "explain": "reasoning",
+    "translate": "translation",
+    "prompt": "user-selected",
+    "fix_command": "fast-edit",
+    "explain_command": "reasoning",
+    "safer_variant": "fast-edit",
+    "docker_help": "fast-edit",
+    "devops_help": "fast-edit",
+}
+
+# Default proofread issue categories (configurable).
+EVERYWHERE_PROOFREAD_CATEGORIES: list = [
+    "spelling", "grammar", "punctuation", "style", "clarity",
+    "consistency", "terminology",
+]
 # Ollama-path default for the fast tier (voice intent, tool routing, and the
 # other real-time classification passes). On an OpenAI-compatible chat
 # provider an unset fast model resolves to the active chat model instead —
@@ -185,7 +225,10 @@ def _probe_npu_retrieval(retries: int = 3) -> Dict[str, Any]:
     if _NPU_PROBE_CACHE is not None:
         return _NPU_PROBE_CACHE
 
+    import threading as _th
     import urllib.request
+    _tname = _th.current_thread().name
+    print(f"  [npu-probe:{_tname}] start", flush=True)
     for _ in range(max(1, retries)):
         try:
             with urllib.request.urlopen(
@@ -196,8 +239,11 @@ def _probe_npu_retrieval(retries: int = 3) -> Dict[str, Any]:
                 "model": str(data.get("embedding_model", "Qwen3-Embedding-0.6B-int4-cw-ov")),
                 "dimensions": data.get("embedding_dimensions", 1024),
             }
+            print(f"  [npu-probe:{_tname}] capabilities OK", flush=True)
             return _NPU_PROBE_CACHE
-        except Exception:
+        except Exception as _e:
+            print(f"  [npu-probe:{_tname}] capabilities failed: "
+                  f"{type(_e).__name__}: {_e}", flush=True)
             try:
                 with urllib.request.urlopen(
                     "http://127.0.0.1:8010/health", timeout=3
@@ -207,9 +253,12 @@ def _probe_npu_retrieval(retries: int = 3) -> Dict[str, Any]:
                     "model": "Qwen3-Embedding-0.6B-int4-cw-ov",
                     "dimensions": 1024,
                 }
+                print(f"  [npu-probe:{_tname}] health OK", flush=True)
                 return _NPU_PROBE_CACHE
-            except Exception:
-                pass
+            except Exception as _e2:
+                print(f"  [npu-probe:{_tname}] health failed: "
+                      f"{type(_e2).__name__}: {_e2}", flush=True)
+    print(f"  [npu-probe:{_tname}] no NPU retrieval service", flush=True)
     _NPU_PROBE_CACHE = {}
     return _NPU_PROBE_CACHE
 
@@ -416,6 +465,9 @@ class Settings:
     ollama_chat_model: str
     llm_chat_timeout_sec: float
     llm_tools_timeout_sec: float
+    #: Completion-token budget for chat replies (reasoning models need room
+    #: for hidden reasoning + the visible answer). See get_default_config.
+    llm_max_tokens: int
     # Tight deadline for the cheap distil passes used by memory_digest and
     # tool_result_digest. Separate from `llm_tools_timeout_sec` because
     # those paths run a small classification-shaped LLM call, not a
@@ -491,11 +543,48 @@ class Settings:
     wake_aliases: list[str]
     wake_fuzzy_ratio: float
 
+    # Presence Orchestration
+    presence_default_mode: str  # "passive", "companion", etc.
+
+    # Terminal Command Composer (K1–K9)
+    terminal_composer_enabled: bool
+    terminal_composer_require_focus_proof: bool
+    terminal_command_memory_ttl_s: float
+    terminal_output_capture_enabled: bool
+    terminal_output_max_bytes: int
+    terminal_output_max_lines: int
+    terminal_destructive_confirmation: bool
+    terminal_clipboard_restore: bool
+    terminal_windows_terminal_paste: str
+    terminal_conhost_paste: str
+    terminal_unknown_shell_policy: str
+    terminal_bridge_pipe_name: str
+
     # Whisper Speech Recognition
     whisper_model: str
-    whisper_backend: str  # "auto", "mlx", or "faster-whisper"
+    whisper_backend: str  # "auto", "mlx", "faster-whisper", or "openvino"
     whisper_device: str  # "cuda", "auto", or "cpu" (only for faster-whisper)
     whisper_compute_type: str
+    # OpenVINO IR speech backend (isolated CPython 3.13 x64 worker). These
+    # keys are separate from ``whisper_device`` / ``whisper_compute_type`` so
+    # an NPU selection never overwrites a faster-whisper CUDA/CPU preference.
+    #: Artifact selection for the selected model family: "int8" (NNCF
+    #: weight-compressed IR) or "fp16". Artifact precision, not a claim
+    #: about the precision of every runtime operation.
+    whisper_openvino_precision: str
+    #: Explicit inference target; "NPU" by default, "CPU"/"GPU" accepted.
+    whisper_openvino_device: str
+    #: Pipeline choice for the OpenVINO lane: "stateful" (production default,
+    #: proven NPU path) or "static" (explicit diagnostic mode, no auto-fallback).
+    whisper_openvino_pipeline: str
+    #: Runtime discovery route: "installed" (registry/setupvars layout) or
+    #: "wheel" (exact owner-supplied cp313 wheels in a dedicated env).
+    whisper_openvino_runtime_source: str
+    #: Optional installed-root override; empty means installer discovery.
+    whisper_openvino_runtime_root: str
+    #: Optional worker-interpreter override; empty means discover the
+    #: managed CPython 3.13 x64 interpreter.
+    whisper_openvino_python: str
     whisper_vad: bool
     whisper_min_confidence: float
     #: Canonical log-domain threshold. Segments with ``avg_logprob`` below
@@ -529,6 +618,31 @@ class Settings:
     speech_spellcheck_languages: list[str]
     # Extra terms kept verbatim on top of wake aliases and persona names.
     speech_spellcheck_protected_terms: list[str]
+
+    # Language-aware Grammar Judge (Gemma). Validates the FINAL Whisper
+    # transcript against the Whisper-detected language and routes ASR
+    # corruption to a separate recovery pass. See jarvis.listening.grammar.
+    grammar_judge_enabled: bool
+    # Language-detection confidence gate thresholds (Section 3).
+    grammar_language_high_probability: float
+    grammar_language_high_margin: float
+    grammar_language_medium_probability: float
+    grammar_language_medium_margin: float
+    # Auto-accept only surface corrections at/above this grammar confidence.
+    grammar_auto_correction_threshold: float
+    # Reject (invalid) naturalness at/below this score.
+    grammar_reject_threshold: float
+    # Above this semantic distance a recovery candidate is never auto-accepted.
+    grammar_semantic_change_threshold: float
+    # Below this phonetic similarity a recovery candidate is never auto-accepted.
+    grammar_phonetic_similarity_threshold: float
+    # Per-pass latency budgets.
+    grammar_judge_timeout_sec: float
+    asr_recovery_timeout_sec: float
+    # Bounded LRU cache size for identical grammar evaluations.
+    grammar_judge_cache_size: int
+    # Max Whisper re-decode attempts per utterance (initial decode not counted).
+    grammar_max_redecode_attempts: int
 
     # Voice Activity Detection (VAD)
     vad_enabled: bool
@@ -717,6 +831,52 @@ class Settings:
     proactive_mode: str = "authentic"
     proactive_min_gap_sec: Optional[float] = None
     proactive_hour_limit: Optional[int] = None
+
+    # Everywhere (OS-wide AI text interaction plane; everywhere.spec.md).
+    #: Master switch; when False the named-pipe broker is not started.
+    everywhere_enabled: bool = True
+    #: Current-user named pipe for the native host (no TCP).
+    everywhere_pipe_name: str = "toastovac-everywhere-v1"
+    #: Hotkey table (toolbar + direct actions), all configurable.
+    everywhere_hotkeys: Dict[str, str] = None  # None -> EVERYWHERE_DEFAULT_HOTKEYS
+    #: Position the overlay at the selection/caret rect (else pointer).
+    everywhere_toolbar_follows_selection: bool = True
+    #: Show the passive toolbar next to a fresh selection.
+    everywhere_passive_toolbar: bool = True
+    #: Editable per-action prompts (empty = built-in defaults).
+    everywhere_prompts: Dict[str, str] = None
+    #: Alternatives window (min..max, default count).
+    everywhere_alternatives_min: int = 3
+    everywhere_alternatives_max: int = 15
+    everywhere_alternatives_count: int = 3
+    #: Fix All confidence policy (explicit, config-driven).
+    everywhere_fix_all_min_confidence: float = 0.8
+    #: Configurable proofread issue categories.
+    everywhere_proofread_categories: list = None
+    #: Translation: default target + the last five chosen languages.
+    everywhere_translate_default_language: str = "cs"
+    everywhere_translate_recent_languages: list = None
+    #: OCR backend choice: "windows-ai" | "windows-media" | "oneocr" (explicit).
+    everywhere_ocr_backend: str = "windows-ai"
+    #: ONNX Runtime provider for the OneOCR backend: "cpu" | "directml" |
+    #: "cuda" | "openvino" — exactly one, no implicit fallback chain.
+    everywhere_ocr_provider: str = "cpu"
+    #: Alt+drag screen-reading gesture knobs.
+    everywhere_screen_reading_modifier: str = "alt"
+    everywhere_screen_reading_suppress_native: bool = True
+    #: Replacement provider policy: "provider-first" | "unicode-input" |
+    #: "clipboard-transaction" | "copy-only".
+    everywhere_replace_policy: str = "provider-first"
+    #: Per-action model profile names (mapped by everywhere/model_profiles).
+    everywhere_profiles: Dict[str, str] = None
+    #: Process names whose controls are never read (on top of UIA password).
+    everywhere_sensitive_denylist: list = None
+    #: Per-application overrides (hotkeys, profiles) keyed by process name.
+    everywhere_app_overrides: Dict[str, Any] = None
+    #: Full selected-text logging is opt-in; default metadata-only.
+    everywhere_debug: bool = False
+    #: Saved prompt library (first-class, local JSON persistence).
+    everywhere_prompt_library: list = None
 
     # Local model cache root for Whisper weights (e.g. D:\_MODELS on the
     # preflight host; empty = HF default cache).
@@ -1009,7 +1169,7 @@ def _voice_pe_rgb(value: Any) -> list:
 
 def get_default_config() -> Dict[str, Any]:
     """Returns the default configuration values."""
-    return {
+    defaults = {
         # Database & Storage
         "db_path": _default_db_path(),
         "sqlite_vss_path": None,
@@ -1039,6 +1199,11 @@ def get_default_config() -> Dict[str, Any]:
         "ollama_chat_model": _default_chat_model(),
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
+        # Completion-token budget for chat replies. Reasoning models (gemma4,
+        # qwen3-thinking, etc.) spend tokens on hidden reasoning BEFORE the
+        # visible answer, so a small budget truncates the answer to a fragment
+        # (e.g. a bare "---"). 8192 leaves ample room for reasoning + answer.
+        "llm_max_tokens": 8192,
         # Cheap distil passes should fail fast — a hung digest call would
         # block the reply loop per tool call, amplified by agentic turns.
         # Budgets are sized from the slowest expected decode: prefill seconds
@@ -1145,9 +1310,18 @@ def get_default_config() -> Dict[str, Any]:
         # Hardware-aware default: large-v3-turbo on CUDA/RTX hosts, medium on
         # the Intel Arc / NPU / plain-CPU path (see _hardware_compute_kind).
         "whisper_model": _default_whisper_model(),
-        "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", or "faster-whisper"
+        "whisper_backend": "auto",  # "auto" (MLX on Apple Silicon, else faster-whisper), "mlx", "faster-whisper", or "openvino"
         "whisper_device": _default_whisper_device(),  # "cuda" (recommended if available), "auto", or "cpu" (only for faster-whisper)
         "whisper_compute_type": "int8",
+        # OpenVINO IR speech backend on the Intel NPU. The representative
+        # new-install profile is large-v3-turbo INT8 on NPU through the
+        # installed runtime route; ``auto`` never selects it implicitly.
+        "whisper_openvino_precision": "int8",  # "int8" (recommended) | "fp16"
+        "whisper_openvino_device": "NPU",  # "NPU" (default) | "CPU" | "GPU"
+        "whisper_openvino_pipeline": "stateful",  # "stateful" (production) | "static" (diagnostic)
+        "whisper_openvino_runtime_source": "python",  # "python" (production: C:\Python314 cp314 NPU lane) | "installed" | "wheel"
+        "whisper_openvino_runtime_root": "",  # empty = installer discovery
+        "whisper_openvino_python": "",  # empty = managed CPython 3.13 x64
         # Local-first HF-style cache root for pre-placed Whisper weights
         # (preflight host: D:\_MODELS; layout <root>/hub/models--org--name).
         "whisper_cache_dir": _detect_whisper_cache_dir(),
@@ -1172,19 +1346,52 @@ def get_default_config() -> Dict[str, Any]:
         "speech_spellcheck_languages": ["en", "cs", "vi", "sk"],
         "speech_spellcheck_protected_terms": [],
 
+        # Language-aware Grammar Judge (Gemma). Enabled by default: it validates
+        # the FINAL transcript against the Whisper-detected language and runs a
+        # bounded audio-retaining recovery loop for ASR corruption. The flag is
+        # an emergency kill switch — when false the pipeline is a transparent
+        # pass-through and logs ``grammar_judge_disabled`` (no validation claim).
+        "grammar_judge_enabled": True,
+        # Language-detection confidence gate (grammar spec Section 3).
+        "grammar_language_high_probability": 0.90,
+        "grammar_language_high_margin": 0.25,
+        "grammar_language_medium_probability": 0.65,
+        "grammar_language_medium_margin": 0.10,
+        # Auto-accept only surface corrections at/above this grammar confidence.
+        "grammar_auto_correction_threshold": 0.95,
+        # Below this naturalness score the transcript is treated as invalid.
+        "grammar_reject_threshold": 0.4,
+        # Above this semantic distance a recovery candidate is never auto-accepted.
+        "grammar_semantic_change_threshold": 0.5,
+        # Below this phonetic similarity a recovery candidate is never auto-accepted.
+        "grammar_phonetic_similarity_threshold": 0.6,
+        # Per-pass latency budgets (seconds). Strict; a timeout is explicit.
+        "grammar_judge_timeout_sec": 6.0,
+        "asr_recovery_timeout_sec": 8.0,
+        # Bounded LRU cache size for identical grammar evaluations.
+        "grammar_judge_cache_size": 256,
+        # Max Whisper re-decode attempts per utterance (initial decode not
+        # counted). Bounds the recovery loop.
+        "grammar_max_redecode_attempts": 2,
+
         # Voice Activity Detection (VAD)
         "vad_enabled": True,
         "vad_aggressiveness": 2,
         "vad_frame_ms": 20,
         "vad_pre_roll_ms": 240,
-        "endpoint_silence_ms": 800,
+        # 2200ms, not 800: a mid-sentence thinking pause must not close the
+        # utterance. Still well under voice_collect_seconds (4.5s), so a turn
+        # never stalls — it just tolerates a slower speaker.
+        "endpoint_silence_ms": 2200,
         "max_utterance_ms": 12000,
         "tts_max_utterance_ms": 3000,  # Shorter timeout during TTS for quick stop detection
 
         # UI/UX Features
         "tune_enabled": False,  # Idle/thinking pad tone is off by default (silent when idle)
         "hot_window_enabled": True,
-        "hot_window_seconds": 3.0,
+        # 15s, not 3s: a person needs time to decide to speak after a reply —
+        # a sleepy brain at 4am or an elder speaker thinks before answering.
+        "hot_window_seconds": 15.0,
         "low_power_mode": False,
         "echo_energy_threshold": 2.0,
         "echo_tolerance": 0.3,  # Time tolerance for echo detection timing
@@ -1328,7 +1535,39 @@ def get_default_config() -> Dict[str, Any]:
         "virtual_microphone_idle_release_s": 5.0,
         "virtual_microphone_fail_closed": True,
         "virtual_microphone_publish_unconverged": False,
+
+        # Everywhere (OS-wide AI text interaction plane; everywhere.spec.md).
+        "everywhere_enabled": True,
+        "everywhere_pipe_name": "toastovac-everywhere-v1",
+        "everywhere_toolbar_follows_selection": True,
+        "everywhere_passive_toolbar": True,
+        "everywhere_alternatives_min": 3,
+        "everywhere_alternatives_max": 15,
+        "everywhere_alternatives_count": 3,
+        "everywhere_fix_all_min_confidence": 0.8,
+        "everywhere_proofread_categories": list(EVERYWHERE_PROOFREAD_CATEGORIES),
+        "everywhere_translate_default_language": "cs",
+        "everywhere_translate_recent_languages": [],
+        "everywhere_ocr_backend": "windows-ai",
+        "everywhere_ocr_provider": "cpu",
+        "everywhere_screen_reading_modifier": "alt",
+        "everywhere_screen_reading_suppress_native": True,
+        "everywhere_replace_policy": "provider-first",
+        "everywhere_sensitive_denylist": [],
+        "everywhere_app_overrides": {},
+        "everywhere_debug": False,
+        "everywhere_prompt_library": [],
     }
+    # Flat hotkey / prompt / profile slots (UI-friendly single source of
+    # truth; the resolved tables live on Settings.everywhere_*).
+    for _slot, _value in EVERYWHERE_DEFAULT_HOTKEYS.items():
+        defaults[f"everywhere_hotkey_{_slot}"] = _value
+    for _slot, _value in EVERYWHERE_DEFAULT_PROFILES.items():
+        defaults[f"everywhere_profile_{_slot}"] = _value
+    for _slot in ("rewrite", "proofread", "alternatives", "explain",
+                  "translate"):
+        defaults[f"everywhere_prompt_{_slot}"] = ""
+    return defaults
 
 
 def export_example_config(include_db_path: bool = False) -> Dict[str, Any]:
@@ -1494,17 +1733,69 @@ def load_settings() -> Settings:
     wake_word = str(merged.get("wake_word", "jarvis")).strip().lower()
     wake_aliases = [a.strip().lower() for a in _ensure_list(merged.get("wake_aliases")) if a.strip()]
     wake_fuzzy_ratio = float(merged.get("wake_fuzzy_ratio", 0.78))
+    presence_default_mode = str(merged.get("presence_default_mode", "passive"))
+    # Terminal Command Composer defaults (idempotent; no migration needed —
+    # every key has a safe default and none changes existing semantics).
+    terminal_composer_enabled = bool(merged.get("terminal_composer_enabled", True))
+    terminal_composer_require_focus_proof = bool(
+        merged.get("terminal_composer_require_focus_proof", True))
+    terminal_command_memory_ttl_s = float(
+        merged.get("terminal_command_memory_ttl_s", 3600))
+    terminal_output_capture_enabled = bool(
+        merged.get("terminal_output_capture_enabled", True))
+    terminal_output_max_bytes = int(merged.get("terminal_output_max_bytes", 65536))
+    terminal_output_max_lines = int(merged.get("terminal_output_max_lines", 400))
+    terminal_destructive_confirmation = bool(
+        merged.get("terminal_destructive_confirmation", True))
+    terminal_clipboard_restore = bool(merged.get("terminal_clipboard_restore", True))
+    terminal_windows_terminal_paste = str(
+        merged.get("terminal_windows_terminal_paste", "ctrl_shift_v"))
+    terminal_conhost_paste = str(merged.get("terminal_conhost_paste", "ctrl_v"))
+    terminal_unknown_shell_policy = str(
+        merged.get("terminal_unknown_shell_policy", "reject"))
+    terminal_bridge_pipe_name = str(
+        merged.get("terminal_bridge_pipe_name", "Toustovac.TerminalBridge.v1"))
     # whisper_model accepts a size name ("medium") or a local model
     # directory; _expand_path is a no-op for plain names.
     whisper_model = _expand_path(merged.get("whisper_model")) or "medium"
     whisper_backend = os.environ.get("JARVIS_WHISPER_BACKEND", "").lower() or str(merged.get("whisper_backend", "auto")).lower()
-    if whisper_backend not in ("auto", "mlx", "faster-whisper"):
+    if whisper_backend not in ("auto", "mlx", "faster-whisper", "openvino"):
         whisper_backend = "auto"
     whisper_device = str(merged.get("whisper_device", "auto")).lower()
     if whisper_device not in ("cuda", "auto", "cpu"):
         whisper_device = "auto"
     whisper_compute_type = str(merged.get("whisper_compute_type", "int8"))
     whisper_cache_dir = str(merged.get("whisper_cache_dir", "") or "").strip()
+
+    # OpenVINO speech backend keys. Every invalid value gets a visible
+    # configuration error plus the schema default; nothing is silently
+    # coerced between precisions or languages.
+    whisper_openvino_precision = str(merged.get("whisper_openvino_precision", "int8") or "int8").strip().lower()
+    if whisper_openvino_precision not in ("int8", "fp16"):
+        print(f"  ⚠️  Config error: whisper_openvino_precision='{whisper_openvino_precision}' is invalid (OV_MODEL_INCOMPLETE); using default 'int8'", flush=True)
+        whisper_openvino_precision = "int8"
+    whisper_openvino_device = str(merged.get("whisper_openvino_device", "NPU") or "NPU").strip().upper()
+    if whisper_openvino_device not in ("NPU", "CPU", "GPU"):
+        print(f"  ⚠️  Config error: whisper_openvino_device='{whisper_openvino_device}' is unavailable (OV_NPU_UNAVAILABLE); using default 'NPU'", flush=True)
+        whisper_openvino_device = "NPU"
+    whisper_openvino_pipeline = str(merged.get("whisper_openvino_pipeline", "stateful") or "stateful").strip().lower()
+    if whisper_openvino_pipeline not in ("stateful", "static"):
+        print(f"  ⚠️  Config error: whisper_openvino_pipeline='{whisper_openvino_pipeline}' is invalid (OV_DECODE_POLICY_UNSUPPORTED); using default 'stateful'", flush=True)
+        whisper_openvino_pipeline = "stateful"
+    whisper_openvino_runtime_source = str(merged.get("whisper_openvino_runtime_source", "python") or "python").strip().lower()
+    if whisper_openvino_runtime_source not in ("installed", "wheel", "python"):
+        print(f"  ⚠️  Config error: whisper_openvino_runtime_source='{whisper_openvino_runtime_source}' is invalid (OV_RUNTIME_NOT_FOUND); using default 'python'", flush=True)
+        whisper_openvino_runtime_source = "python"
+    whisper_openvino_runtime_root = str(merged.get("whisper_openvino_runtime_root", "") or "").strip()
+    if whisper_openvino_runtime_root:
+        try:
+            _root_ok = Path(whisper_openvino_runtime_root).expanduser().is_dir()
+        except Exception:
+            _root_ok = False
+        if not _root_ok:
+            print(f"  ⚠️  Config error: whisper_openvino_runtime_root='{whisper_openvino_runtime_root}' is not a directory (OV_RUNTIME_NOT_FOUND); falling back to installer discovery", flush=True)
+            whisper_openvino_runtime_root = ""
+    whisper_openvino_python = str(merged.get("whisper_openvino_python", "") or "").strip()
     whisper_vad = bool(merged.get("whisper_vad", True))
     voice_min_energy = float(merged.get("voice_min_energy", 0.02))
     vad_enabled = bool(merged.get("vad_enabled", True))
@@ -1734,6 +2025,93 @@ def load_settings() -> Settings:
         max(5.0, _voice_pe_float(merged.get("voice_pe_hardware_timeout_s"), 180.0)),
     )
 
+    # Everywhere (everywhere.spec.md). Hotkeys, prompts and profiles are
+    # flat keys in config.json (UI-friendly); the resolved tables below are
+    # what the broker and the native host read. Unknown keys are dropped so
+    # a hand-edited config cannot invent an action or a hotkey slot.
+    everywhere_enabled = bool(merged.get("everywhere_enabled", True))
+    everywhere_pipe_name = str(
+        merged.get("everywhere_pipe_name") or "toastovac-everywhere-v1"
+    ).strip()
+    everywhere_hotkeys: Dict[str, str] = {}
+    for _slot, _default in EVERYWHERE_DEFAULT_HOTKEYS.items():
+        _val = str(merged.get(f"everywhere_hotkey_{_slot}", "") or "").strip()
+        everywhere_hotkeys[_slot] = _val or _default
+    everywhere_toolbar_follows_selection = bool(
+        merged.get("everywhere_toolbar_follows_selection", True))
+    everywhere_passive_toolbar = bool(
+        merged.get("everywhere_passive_toolbar", True))
+    everywhere_prompts: Dict[str, str] = {}
+    for _slot in ("rewrite", "proofread", "alternatives", "explain",
+                  "translate"):
+        _val = str(merged.get(f"everywhere_prompt_{_slot}", "") or "").strip()
+        if _val:
+            everywhere_prompts[_slot] = _val
+    everywhere_alternatives_min = max(1, min(15, int(
+        merged.get("everywhere_alternatives_min", 3))))
+    everywhere_alternatives_max = max(
+        everywhere_alternatives_min,
+        min(15, int(merged.get("everywhere_alternatives_max", 15))))
+    everywhere_alternatives_count = max(
+        everywhere_alternatives_min,
+        min(everywhere_alternatives_max,
+            int(merged.get("everywhere_alternatives_count", 3))))
+    everywhere_fix_all_min_confidence = min(1.0, max(0.0, float(
+        merged.get("everywhere_fix_all_min_confidence", 0.8))))
+    everywhere_proofread_categories = [
+        str(c).strip() for c in _ensure_list(
+            merged.get("everywhere_proofread_categories")
+            or EVERYWHERE_PROOFREAD_CATEGORIES) if str(c).strip()]
+    everywhere_translate_default_language = str(
+        merged.get("everywhere_translate_default_language") or "cs").strip()
+    everywhere_translate_recent_languages = [
+        str(c).strip() for c in _ensure_list(
+            merged.get("everywhere_translate_recent_languages"))
+        if str(c).strip()][:5]
+    everywhere_ocr_backend = str(
+        merged.get("everywhere_ocr_backend") or "windows-ai").strip().lower()
+    if everywhere_ocr_backend not in ("windows-ai", "windows-media", "oneocr"):
+        print(
+            f"  ⚠️  Config error: everywhere_ocr_backend="
+            f"'{everywhere_ocr_backend}' is invalid (OCR_BACKEND_UNAVAILABLE);"
+            " using default 'windows-ai'",
+            flush=True,
+        )
+        everywhere_ocr_backend = "windows-ai"
+    everywhere_ocr_provider = str(
+        merged.get("everywhere_ocr_provider") or "cpu").strip().lower()
+    if everywhere_ocr_provider not in ("cpu", "directml", "cuda", "openvino"):
+        print(
+            f"  ⚠️  Config error: everywhere_ocr_provider="
+            f"'{everywhere_ocr_provider}' is invalid "
+            "(OCR_PROVIDER_UNAVAILABLE); using default 'cpu'",
+            flush=True,
+        )
+        everywhere_ocr_provider = "cpu"
+    everywhere_screen_reading_modifier = str(
+        merged.get("everywhere_screen_reading_modifier") or "alt").strip().lower()
+    everywhere_screen_reading_suppress_native = bool(
+        merged.get("everywhere_screen_reading_suppress_native", True))
+    everywhere_replace_policy = str(
+        merged.get("everywhere_replace_policy") or "provider-first").strip().lower()
+    if everywhere_replace_policy not in (
+            "provider-first", "unicode-input", "clipboard-transaction",
+            "copy-only"):
+        everywhere_replace_policy = "provider-first"
+    everywhere_profiles: Dict[str, str] = dict(EVERYWHERE_DEFAULT_PROFILES)
+    for _slot in everywhere_profiles:
+        _val = str(merged.get(f"everywhere_profile_{_slot}", "") or "").strip()
+        if _val:
+            everywhere_profiles[_slot] = _val
+    everywhere_sensitive_denylist = [
+        str(n).strip() for n in _ensure_list(
+            merged.get("everywhere_sensitive_denylist")) if str(n).strip()]
+    everywhere_app_overrides = _ensure_dict(merged.get("everywhere_app_overrides"))
+    everywhere_debug = bool(merged.get("everywhere_debug", False))
+    everywhere_prompt_library = list(
+        merged.get("everywhere_prompt_library")
+        if isinstance(merged.get("everywhere_prompt_library"), list) else [])
+
     # Centralized identity / recording profile
     assistant_display_name = str(
         merged.get("assistant_display_name", BRANDING["display_name"]) or BRANDING["display_name"]
@@ -1808,6 +2186,16 @@ def load_settings() -> Settings:
     whisper_language = str(merged.get("whisper_language", "cs+vi") or "cs+vi").strip().lower()
     if whisper_language not in ("en", "cs", "vi", "sk", "cs+vi"):
         whisper_language = "cs+vi"
+    # English-only/distilled checkpoints cannot serve the cs/vi/cs+vi set;
+    # the mismatch is reported, the saved values are kept for the runtime
+    # status line (no silent rewrite of the user's selection).
+    if str(whisper_model).endswith(".en") and whisper_language in ("cs", "vi", "cs+vi"):
+        print(
+            f"  ⚠️  Config error: model '{whisper_model}' is English-only and does not support "
+            f"language '{whisper_language}' (OV_MODEL_INCOMPLETE). Choose a multilingual model "
+            "or language 'en' in Settings.",
+            flush=True,
+        )
     speech_spellcheck_enabled = bool(merged.get("speech_spellcheck_enabled", True))
     speech_spellcheck_languages = [
         code.casefold()
@@ -1819,7 +2207,21 @@ def load_settings() -> Settings:
         for term in _ensure_list(merged.get("speech_spellcheck_protected_terms"))
         if term.strip()
     ]
+    grammar_judge_enabled = bool(merged.get("grammar_judge_enabled", True))
+    grammar_language_high_probability = float(merged.get("grammar_language_high_probability", 0.90))
+    grammar_language_high_margin = float(merged.get("grammar_language_high_margin", 0.25))
+    grammar_language_medium_probability = float(merged.get("grammar_language_medium_probability", 0.65))
+    grammar_language_medium_margin = float(merged.get("grammar_language_medium_margin", 0.10))
+    grammar_auto_correction_threshold = float(merged.get("grammar_auto_correction_threshold", 0.95))
+    grammar_reject_threshold = float(merged.get("grammar_reject_threshold", 0.4))
+    grammar_semantic_change_threshold = float(merged.get("grammar_semantic_change_threshold", 0.5))
+    grammar_phonetic_similarity_threshold = float(merged.get("grammar_phonetic_similarity_threshold", 0.6))
+    grammar_judge_timeout_sec = float(merged.get("grammar_judge_timeout_sec", 6.0))
+    asr_recovery_timeout_sec = float(merged.get("asr_recovery_timeout_sec", 8.0))
+    grammar_judge_cache_size = max(0, int(merged.get("grammar_judge_cache_size", 256)))
+    grammar_max_redecode_attempts = max(0, int(merged.get("grammar_max_redecode_attempts", 2)))
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
+    llm_max_tokens = max(256, int(merged.get("llm_max_tokens", 8192)))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
     llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 12.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
@@ -1843,6 +2245,7 @@ def load_settings() -> Settings:
         ollama_embed_model=ollama_embed_model,
         ollama_chat_model=ollama_chat_model,
         llm_chat_timeout_sec=llm_chat_timeout_sec,
+        llm_max_tokens=llm_max_tokens,
         llm_tools_timeout_sec=llm_tools_timeout_sec,
         llm_digest_timeout_sec=llm_digest_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
@@ -1907,12 +2310,35 @@ def load_settings() -> Settings:
         wake_aliases=wake_aliases,
         wake_fuzzy_ratio=wake_fuzzy_ratio,
 
+        # Presence Orchestration
+        presence_default_mode=presence_default_mode,
+
+        # Terminal Command Composer
+        terminal_composer_enabled=terminal_composer_enabled,
+        terminal_composer_require_focus_proof=terminal_composer_require_focus_proof,
+        terminal_command_memory_ttl_s=terminal_command_memory_ttl_s,
+        terminal_output_capture_enabled=terminal_output_capture_enabled,
+        terminal_output_max_bytes=terminal_output_max_bytes,
+        terminal_output_max_lines=terminal_output_max_lines,
+        terminal_destructive_confirmation=terminal_destructive_confirmation,
+        terminal_clipboard_restore=terminal_clipboard_restore,
+        terminal_windows_terminal_paste=terminal_windows_terminal_paste,
+        terminal_conhost_paste=terminal_conhost_paste,
+        terminal_unknown_shell_policy=terminal_unknown_shell_policy,
+        terminal_bridge_pipe_name=terminal_bridge_pipe_name,
+
         # Whisper Speech Recognition
         whisper_model=whisper_model,
         whisper_backend=whisper_backend,
         whisper_cache_dir=whisper_cache_dir,
         whisper_device=whisper_device,
         whisper_compute_type=whisper_compute_type,
+        whisper_openvino_precision=whisper_openvino_precision,
+        whisper_openvino_device=whisper_openvino_device,
+        whisper_openvino_pipeline=whisper_openvino_pipeline,
+        whisper_openvino_runtime_source=whisper_openvino_runtime_source,
+        whisper_openvino_runtime_root=whisper_openvino_runtime_root,
+        whisper_openvino_python=whisper_openvino_python,
         whisper_vad=whisper_vad,
         whisper_min_confidence=whisper_min_confidence,
         whisper_min_avg_logprob=whisper_min_avg_logprob,
@@ -1925,6 +2351,19 @@ def load_settings() -> Settings:
         speech_spellcheck_enabled=speech_spellcheck_enabled,
         speech_spellcheck_languages=speech_spellcheck_languages,
         speech_spellcheck_protected_terms=speech_spellcheck_protected_terms,
+        grammar_judge_enabled=grammar_judge_enabled,
+        grammar_language_high_probability=grammar_language_high_probability,
+        grammar_language_high_margin=grammar_language_high_margin,
+        grammar_language_medium_probability=grammar_language_medium_probability,
+        grammar_language_medium_margin=grammar_language_medium_margin,
+        grammar_auto_correction_threshold=grammar_auto_correction_threshold,
+        grammar_reject_threshold=grammar_reject_threshold,
+        grammar_semantic_change_threshold=grammar_semantic_change_threshold,
+        grammar_phonetic_similarity_threshold=grammar_phonetic_similarity_threshold,
+        grammar_judge_timeout_sec=grammar_judge_timeout_sec,
+        asr_recovery_timeout_sec=asr_recovery_timeout_sec,
+        grammar_judge_cache_size=grammar_judge_cache_size,
+        grammar_max_redecode_attempts=grammar_max_redecode_attempts,
 
         # Voice Activity Detection (VAD)
         vad_enabled=vad_enabled,
@@ -2032,4 +2471,29 @@ def load_settings() -> Settings:
         # Latency switches
         direct_instruct_mode=direct_instruct_mode,
         intent_judge_enabled=intent_judge_enabled,
+
+        # Everywhere (OS-wide AI text interaction plane)
+        everywhere_enabled=everywhere_enabled,
+        everywhere_pipe_name=everywhere_pipe_name,
+        everywhere_hotkeys=everywhere_hotkeys,
+        everywhere_toolbar_follows_selection=everywhere_toolbar_follows_selection,
+        everywhere_passive_toolbar=everywhere_passive_toolbar,
+        everywhere_prompts=everywhere_prompts,
+        everywhere_alternatives_min=everywhere_alternatives_min,
+        everywhere_alternatives_max=everywhere_alternatives_max,
+        everywhere_alternatives_count=everywhere_alternatives_count,
+        everywhere_fix_all_min_confidence=everywhere_fix_all_min_confidence,
+        everywhere_proofread_categories=everywhere_proofread_categories,
+        everywhere_translate_default_language=everywhere_translate_default_language,
+        everywhere_translate_recent_languages=everywhere_translate_recent_languages,
+        everywhere_ocr_backend=everywhere_ocr_backend,
+        everywhere_ocr_provider=everywhere_ocr_provider,
+        everywhere_screen_reading_modifier=everywhere_screen_reading_modifier,
+        everywhere_screen_reading_suppress_native=everywhere_screen_reading_suppress_native,
+        everywhere_replace_policy=everywhere_replace_policy,
+        everywhere_profiles=everywhere_profiles,
+        everywhere_sensitive_denylist=everywhere_sensitive_denylist,
+        everywhere_app_overrides=everywhere_app_overrides,
+        everywhere_debug=everywhere_debug,
+        everywhere_prompt_library=everywhere_prompt_library,
     )

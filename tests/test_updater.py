@@ -124,7 +124,7 @@ class TestGetPlatformAssetName:
     @pytest.mark.unit
     def test_windows(self):
         with patch("sys.platform", "win32"):
-            assert get_platform_asset_name() == "Jarvis-Windows-x64.zip"
+            assert get_platform_asset_name() == "Toastovac-Windows-x64.zip"
 
     @pytest.mark.unit
     def test_linux(self):
@@ -293,7 +293,7 @@ class TestCheckForUpdates:
                 "assets": [
                     {
                         "id": 100005,
-                        "name": "Jarvis-Windows-x64.zip",  # Only Windows asset
+                        "name": "Toastovac-Windows-x64.zip",  # Only Windows asset
                         "browser_download_url": "https://example.com/download",
                         "size": 1000,
                     }
@@ -826,10 +826,10 @@ class TestInstallUpdateWindows:
         # Create a mock zip file with Jarvis.exe
         zip_path = tmp_path / "update.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
-            zf.writestr("Jarvis.exe", b"mock executable content")
+            zf.writestr("Toastovac.exe", b"mock executable content")
 
         # Mock get_app_path to return a fake path
-        mock_app_path = tmp_path / "Jarvis.exe"
+        mock_app_path = tmp_path / "Toastovac.exe"
         mock_app_path.write_bytes(b"old executable")
 
         # Import here to avoid issues with platform checks
@@ -891,7 +891,7 @@ class TestInstallUpdateWindows:
 
         zip_path = tmp_path / "update.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
-            zf.writestr("Jarvis.exe", b"mock executable content")
+            zf.writestr("Toastovac.exe", b"mock executable content")
 
         mock_app_path = tmp_path / "Program Files" / "Jarvis" / "Jarvis.exe"
         mock_app_path.parent.mkdir(parents=True)
@@ -1448,9 +1448,9 @@ class TestPathEscaping:
 
     @pytest.mark.unit
     def test_batch_normal_path_unchanged(self):
-        path = Path('C:\\Program Files\\Jarvis\\Jarvis.exe')
+        path = Path('C:\\Program Files\\Toastovac\\Toastovac.exe')
         escaped = _escape_batch_path(path)
-        assert escaped == 'C:\\Program Files\\Jarvis\\Jarvis.exe'
+        assert escaped == 'C:\\Program Files\\Toastovac\\Toastovac.exe'
 
     @pytest.mark.unit
     def test_shell_escapes_single_quotes(self):

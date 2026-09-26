@@ -1,0 +1,30 @@
+{
+  "name": "toustovac-terminal-bridge",
+  "displayName": "Toustovač Terminal Bridge",
+  "description": "Context provider + inserter for the Toustovač Terminal Command Composer.",
+  "version": "1.1.0",
+  "publisher": "toustovac",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "extensionKind": ["ui"],
+  "categories": ["Other"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "package": "npm run compile && vsce package --out dist/toustovac-terminal-bridge-1.1.0.vsix"
+  },
+  "files": [
+    "out/**",
+    "package.json"
+  ],
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "typescript": "5.9.3",
+    "@types/vscode": "1.99.1",
+    "@vscode/vsce": "3.9.2"
+  }
+}

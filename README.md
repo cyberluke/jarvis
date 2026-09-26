@@ -139,7 +139,7 @@ Get the latest from [GitHub Releases](https://github.com/isair/jarvis/releases):
 
 | Platform | Download | Run |
 |----------|----------|-----|
-| **Windows** | `Jarvis-Windows-x64.zip` | Extract → Run `Jarvis.exe` |
+| **Windows** | `Toastovac-Windows-x64.zip` | Extract → Run `Toastovac.exe` |
 | **macOS** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
 | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |
 
@@ -286,6 +286,27 @@ The Toustovač can speak up on its own when something meaningful happens (startu
 </details>
 
 <details>
+<summary><strong>Everywhere (OS-wide AI text actions)</strong></summary>
+
+With Everywhere enabled, select text in any Windows app and press the toolbar hotkey (default `Ctrl+Shift+Space`) to **Rewrite**, **Proofread**, get **Alternatives**, **Explain**, **Translate**, or run a saved prompt. Direct chords: `Ctrl+Shift+C` rewrite, `Ctrl+Shift+H` proofread, `Ctrl+Shift+l` alternatives, `Ctrl+Shift+X` explain, `Ctrl+Shift+T` translate, `Ctrl+Shift+J` saved prompt. `Alt`+drag captures non-selectable text through local OCR. Everything stays on the local model you already configured; the native host (`Toastovac.Everywhere.Host.exe`) talks to the assistant over a current-user named pipe only.
+
+```json
+{
+  "everywhere_enabled": true,
+  "everywhere_hotkey_toolbar": "ctrl+shift+space",
+  "everywhere_alternatives_count": 3,
+  "everywhere_fix_all_min_confidence": 0.8,
+  "everywhere_translate_default_language": "cs",
+  "everywhere_ocr_backend": "windows-ai",
+  "everywhere_replace_policy": "provider-first"
+}
+```
+
+All hotkeys (`everywhere_hotkey_*`), action prompts (`everywhere_prompt_*`) and per-action model profiles (`everywhere_profile_*`) are editable in **⚙️ Settings → 🪟 Everywhere**. VS Code editors and terminals keep their existing semantic integrations; other apps use Windows UI Automation; password fields are never read.
+
+</details>
+
+<details>
 <summary><strong>Speech Recognition (Whisper)</strong></summary>
 
 #### Language Modes
@@ -316,9 +337,28 @@ All four keys appear in the Settings window under *Whisper*: the language is a d
 | Base | `base.en` | `base` | ~140 MB | ~1 GB | ~7x |
 | Small | `small.en` | `small` | ~465 MB | ~2 GB | ~4x |
 | **Medium** | `medium.en` | `medium` | ~1.5 GB | ~5 GB | ~2x |
+| Large V3 | - | `large-v3` | ~1.5 GB | ~6 GB | ~1x |
 | Large V3 Turbo | - | `large-v3-turbo` | ~1.5 GB | ~6 GB | ~8x |
 
 Speed is relative to the original large model. [Source](https://github.com/openai/whisper)
+
+#### OpenVINO / Intel NPU Backend
+
+`"whisper_backend": "openvino"` runs the official OpenVINO IR Whisper exports (multilingual `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`) in an isolated CPython 3.13 x64 worker on the selected device. `"Large"` identifies `large-v3` explicitly. Related keys:
+
+```json
+{
+  "whisper_backend": "openvino",
+  "whisper_model": "large-v3-turbo",
+  "whisper_openvino_precision": "int8",        // "int8" (recommended) | "fp16"
+  "whisper_openvino_device": "NPU",            // "NPU" | "CPU" | "GPU"
+  "whisper_openvino_runtime_source": "installed", // "installed" | "wheel"
+  "whisper_openvino_runtime_root": "",         // empty = installer discovery
+  "whisper_openvino_python": ""                // empty = managed CPython 3.13 x64
+}
+```
+
+INT8 means the NNCF INT8 weight-compressed artifact; FP16 is a separate artifact with its own cache identity. `whisper_device` / `whisper_compute_type` remain the faster-whisper settings. The worker keeps genuine `avg_logprob` / `no_speech_prob` statistics for the existing hallucination filters and the `cs+vi` two-pass selection; missing or invalid metrics are a visible `OV_WHISPER_METRICS_UNAVAILABLE` error, not a silent fallback. Provenance, companion build steps and error codes: `docs/openvino-npu-speech.md`.
 
 #### GPU Acceleration (Windows)
 If you have an NVIDIA GPU, Jarvis can use CUDA for much faster speech recognition. The Windows installer offers an optional CUDA download during setup. For development:

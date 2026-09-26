@@ -702,9 +702,9 @@ class ProactiveToasterService:
         self._recent_remarks.append(text)
 
     def _user_block(self, event_type: str, note: str) -> str:
-        parts = [f"Event {event_type}: {note}", "One short spoken remark, in character."]
+        parts = [f"Event {event_type}: {note}", "Jedna krátká mluvená poznámka, v charakteru. Odpověz česky."]
         if self._recent_remarks:
-            parts.append("Previous remarks (vary the wording): " + " | ".join(self._recent_remarks[-3:]))
+            parts.append("Předchozí poznámky (měň formulace): " + " | ".join(self._recent_remarks[-3:]))
         return "\n".join(parts)
 
     # ── Directives and responses ───────────────────────────────────────────
@@ -1024,6 +1024,7 @@ def run_periodic_checks(
     llm_base_url: str = "",
     tts: Any = None,
     busy_check: Optional[Callable[[], bool]] = None,
+    presence: Any = None,
 ) -> List[str]:
     """Sample the environment once and feed every triggered stimulus in.
 
@@ -1050,6 +1051,13 @@ def run_periodic_checks(
 
     def _emit(event: Dict[str, Any], reason_label: Optional[str] = None) -> None:
         try:
+            # Presence mode participates in the deterministic gate (§25):
+            # the coordinator decides WHETHER, the policy phrases HOW.
+            if presence is not None:
+                _ptype = str(event.get("type", ""))
+                if not presence.allows_proactive(_ptype):
+                    service._suppress(f"presence:{_ptype}")
+                    return
             remark = service.handle_event(event, speaking=_speaking())
             if remark:
                 remarks.append(remark)

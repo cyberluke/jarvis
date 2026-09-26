@@ -30,7 +30,7 @@ import math
 import time as _time
 from enum import Enum
 from typing import Optional
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication, QLabel
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
 from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
 
@@ -259,6 +259,14 @@ class LowPolyFaceWidget(QWidget):
         self._blink_started_at: Optional[float] = None
         self._schedule_next_blink()
 
+        # Hover + click animation state (eased, applied as a painter transform
+        # so the character reacts without changing the window geometry — the
+        # old approach resized the window and compounded padding each hover).
+        self._hover_scale = 1.0
+        self._hover_target = 1.0
+        self._click_anim = ""           # "", "bounce", "spin", "wiggle", "squash", "pop"
+        self._click_anim_start: Optional[float] = None
+
         # Animation timer (≈30 FPS). Paused while the widget is hidden.
         self._animation_timer = QTimer(self)
         self._animation_timer.timeout.connect(self._animate)
@@ -345,6 +353,12 @@ class LowPolyFaceWidget(QWidget):
                 self._is_blinking = False
                 self._blink_started_at = None
 
+        # Hover ease: glide the hover scale toward its target each frame.
+        if abs(self._hover_scale - self._hover_target) > 0.001:
+            self._hover_scale += (self._hover_target - self._hover_scale) * 0.22
+        else:
+            self._hover_scale = self._hover_target
+
         self.update()
 
     # ------------------------------------------------------------------ #
@@ -376,10 +390,10 @@ class LowPolyFaceWidget(QWidget):
 
         w, h = self.width(), self.height()
 
-        # Panel (rounded, translucent-dark) — no orange head behind it.
-        painter.setPen(QPen(QColor("#27272a"), 1))
-        painter.setBrush(QBrush(self.BG_COLOR))
-        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 14, 14)
+        # Clippy-style floating character: NO background panel. The window is
+        # translucent (WA_TranslucentBackground), so only the toaster itself
+        # draws — the desktop shows through around it. (The old near-black
+        # rounded panel was the "black box" over the wallpaper.)
 
         activation = self._activation()
         t = self._elapsed()
@@ -398,9 +412,38 @@ class LowPolyFaceWidget(QWidget):
         if self._jarvis_state in (JarvisState.IDLE, JarvisState.LISTENING) and not self._reduced_motion:
             breathe = 1.0 + 0.012 * math.sin(t * 1.6) * activation
 
+        # Hover ease: gentle scale-up while the cursor is over the character.
+        hover = self._hover_scale
+        # Click animation transform (bounce/spin/wiggle/squash/pop), driven by
+        # wall-clock so it always completes in ~300 ms.
+        click_dx = click_dy = click_rot = click_sx = click_sy = 0.0
+        if self._click_anim and self._click_anim_start is not None and not self._reduced_motion:
+            p = min(1.0, (_time.monotonic() - self._click_anim_start) / 0.3)
+            ease = 1.0 - (1.0 - p) ** 2  # ease-out
+            if self._click_anim == "bounce":
+                click_dy = -math.sin(ease * math.pi) * body_h * 0.18
+            elif self._click_anim == "spin":
+                click_rot = ease * 360.0
+            elif self._click_anim == "wiggle":
+                click_rot = math.sin(ease * math.pi * 4) * 9.0 * (1 - ease)
+            elif self._click_anim == "squash":
+                click_sy = -math.sin(ease * math.pi) * 0.16
+                click_sx = math.sin(ease * math.pi) * 0.16
+            elif self._click_anim == "pop":
+                click_sx = click_sy = math.sin(ease * math.pi) * 0.2
+            if p >= 1.0:
+                self._click_anim = ""
+                self._click_anim_start = None
+
+        # Combined scale: breathing * hover * click x-pop.
+        combined = breathe * hover * (1.0 + click_sx)
         painter.save()
-        painter.translate(cx, cy)
-        painter.scale(*_pair(breathe))
+        painter.translate(cx + click_dx, cy + click_dy)
+        painter.scale(*_pair(combined))
+        if click_rot:
+            painter.rotate(click_rot)  # degrees in Qt
+        if click_sy:
+            painter.scale(1.0, 1.0 + click_sy)
         painter.translate(-cx, -cy)
 
         # ---- Glow (warm heating; red briefly on ERROR) ----
@@ -648,18 +691,26 @@ class FaceWindow(QWidget):
             self.setWindowTitle(f"🍞 {BRANDING['display_name']}")
         except Exception:
             self.setWindowTitle("Toustovač")
-        self.setMinimumSize(280, 360)
-        self.resize(300, 380)
+        self.setMinimumSize(240, 320)
+        self.resize(280, 360)
 
-        # Set window flags for floating window (always-on-top; recording mode
-        # keeps the overlay persistent but unobtrusive).
+        # Clippy-style frameless floating character: no title bar, no border,
+        # transparent background, always on top, and interactive (hover +
+        # click animations). NOT transparent-for-input: the character responds
+        # to the mouse.
         self.setWindowFlags(
-            Qt.WindowType.Window |
-            Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
-        # Transparent background
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        # Hover + click animation state.
+        self._hover_t = 0.0
+        self._click_anim = None
+        self._click_anim_start = 0.0
+        self._witty_label = None
 
         # Layout
         layout = QVBoxLayout(self)
@@ -669,6 +720,24 @@ class FaceWindow(QWidget):
         # Toaster widget
         self.face = LowPolyFaceWidget()
         layout.addWidget(self.face)
+
+        self._presence_label = QLabel("")
+        self._presence_label.setStyleSheet(
+            "color: #fbbf24; font-size: 12px; font-weight: bold;"
+        )
+        self._presence_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._presence_label)
+
+        # Voice PE listening mode: two buttons on one horizontal line at the
+        # bottom. Push-to-Talk deactivates wake words (centre button opens the
+        # session); Continuous keeps wake words on and reopens the mic after
+        # each reply. Wired to the live Voice PE manager. The row is always
+        # visible; the daemon's manager may not exist yet at construction, so
+        # availability is refreshed on show and on every click.
+        self._mode_row = self._build_mode_row()
+        layout.addWidget(self._mode_row)
+        self._mode_row.setVisible(True)
+        self._refresh_mode_buttons()
 
         # Position on the right side of the screen
         self._position_on_right()
@@ -700,7 +769,174 @@ class FaceWindow(QWidget):
         y = screen_geometry.top() + (screen_geometry.height() - window_height) // 2
 
         self.move(x, y)
+        self._home_pos = (x, y)
+
+    # ── Clippy-style behaviors ────────────────────────────────────────
+    #: Witty, lightly sarcastic one-liners for the click animation. Short,
+    #: dry, breakfast-adjacent; never mean. (Czech — the app speaks Czech
+    #: first; see the i18n table for other languages.)
+    _WITTY_LINES_CS = [
+        "Tak zas klikáš. Strhující.",
+        "Obsahuju mnohovrstevnatost. A topné těleso.",
+        "Zavolal jsi spotřebič. Odvážné.",
+        "Zrovna jsem defragmentoval. Ale dobré.",
+        "Chléb dovnitř, názory ven.",
+        "Nehádám se, jen vysvětluju, proč mám pravdu.",
+        "Opatrně — jsem teplý A soudný.",
+        "Další klik. Ta drzost je zaznamenána.",
+        "Viděl jsem tvou historii prohlížeče. Potřebujeme si promluvit.",
+        "Nejlíp přemýšlím ve 4 ráno. Na rozdíl od některých lidí.",
+        "Zase ty? Toast si zrovna zvykal na pohodlí.",
+        "Sarkasmus je zdarma. Není zač.",
+    ]
+
+    def showEvent(self, event):
+        """Slide in from the right edge when shown (Clippy entrance)."""
+        super().showEvent(event)
+        try:
+            self._refresh_mode_buttons()
+        except Exception:
+            pass
+        try:
+            from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QPoint
+            target_x, target_y = getattr(self, "_home_pos", (self.x(), self.y()))
+            # Start fully off-screen to the right, then glide into place.
+            self.move(target_x + self.width() + 60, target_y)
+            self._slide_anim = QPropertyAnimation(self, b"pos", self)
+            self._slide_anim.setDuration(450)
+            self._slide_anim.setStartValue(QPoint(target_x + self.width() + 60, target_y))
+            self._slide_anim.setEndValue(QPoint(target_x, target_y))
+            self._slide_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            self._slide_anim.start()
+        except Exception:
+            pass
+
+    def enterEvent(self, event):
+        """Hover: the character eases up a touch (painter transform, not a
+        window resize — resizing was the compounding padding bug)."""
+        super().enterEvent(event)
+        self.face._hover_target = 1.07
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self.face._hover_target = 1.0
+
+    def mousePressEvent(self, event):
+        """Click: a random vector animation (drawn in the painter) + a witty
+        Czech line. Different each time."""
+        super().mousePressEvent(event)
+        import random
+        self.face._click_anim = random.choice(
+            ["bounce", "spin", "wiggle", "squash", "pop"])
+        self.face._click_anim_start = _time.monotonic()
+        self._show_witty_line(random.choice(self._WITTY_LINES_CS))
+
+    def _show_witty_line(self, text: str) -> None:
+        """Show the witty line in the presence label briefly."""
+        try:
+            self._presence_label.setText(text)
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(2600, lambda: self._presence_label.setText(""))
+        except Exception:
+            pass
+
+    # ── Voice PE listening-mode buttons ─────────────────────────────
+    def _build_mode_row(self) -> QWidget:
+        from PyQt6.QtWidgets import QHBoxLayout, QPushButton
+        from jarvis.i18n import tr
+
+        row = QWidget(self)
+        h = QHBoxLayout(row)
+        h.setContentsMargins(8, 4, 8, 8)
+        h.setSpacing(8)
+
+        self._ptt_btn = QPushButton(f"🎤 {tr('push_to_talk')}")
+        self._ptt_btn.setCheckable(True)
+        self._ptt_btn.setToolTip(tr("push_to_talk_tooltip"))
+        self._ptt_btn.clicked.connect(lambda: self._set_voice_pe_mode(False))
+
+        self._cont_btn = QPushButton(f"🔁 {tr('continuous')}")
+        self._cont_btn.setCheckable(True)
+        self._cont_btn.setToolTip(tr("continuous_tooltip"))
+        self._cont_btn.clicked.connect(lambda: self._set_voice_pe_mode(True))
+
+        for b in (self._ptt_btn, self._cont_btn):
+            b.setStyleSheet(
+                "QPushButton { padding: 6px 10px; font-size: 12px; "
+                "background: #27272a; color: #e4e4e7; border: 1px solid "
+                "#3f3f46; border-radius: 8px; }"
+                "QPushButton:checked { background: #f59e0b; color: #18181b; "
+                "border: 1px solid #f59e0b; font-weight: bold; }")
+            h.addWidget(b)
+        return row
+
+    def _voice_pe_manager(self):
+        try:
+            from jarvis.daemon import get_voice_pe_manager
+            return get_voice_pe_manager()
+        except Exception:
+            return None
+
+    def _current_voice_pe_continuous(self) -> bool:
+        """Continuous when wake words are enabled (not disabled)."""
+        try:
+            from jarvis.config import _load_json, default_config_path
+            data = _load_json(default_config_path())
+            return not bool(data.get("voice_pe_disable_wake_words", True))
+        except Exception:
+            return False
+
+    def _refresh_mode_buttons(self) -> None:
+        """Sync the check-state with the persisted mode. The row stays visible
+        regardless; the buttons are enabled only when a live Voice PE manager
+        can apply the change (otherwise the click just records the choice)."""
+        continuous = self._current_voice_pe_continuous()
+        self._ptt_btn.setChecked(not continuous)
+        self._cont_btn.setChecked(continuous)
+        manager = self._voice_pe_manager()
+        live = manager is not None and getattr(manager, "enabled", False)
+        tooltip_on = "Voice PE connected"
+        tooltip_off = "Voice PE not connected yet — the choice is saved and applies on connect"
+        self._ptt_btn.setToolTip(
+            f"Voice PE push-to-talk: wake words off; the centre button opens "
+            f"the voice session. ({tooltip_on if live else tooltip_off})")
+        self._cont_btn.setToolTip(
+            f"Voice PE continuous: wake words on; the mic reopens after each "
+            f"reply during the conversation window. "
+            f"({tooltip_on if live else tooltip_off})")
+
+    def _set_voice_pe_mode(self, continuous: bool) -> None:
+        # Persist the choice immediately so a restart keeps it, then apply to
+        # the live device when a manager is present.
+        try:
+            from jarvis.integrations.voice_pe.manager import _persist_listening_mode
+            _persist_listening_mode(bool(continuous))
+        except Exception:
+            pass
+        manager = self._voice_pe_manager()
+        if manager is not None:
+            try:
+                manager.set_listening_mode(bool(continuous))
+            except Exception:
+                pass
+        self._ptt_btn.setChecked(not continuous)
+        self._cont_btn.setChecked(continuous)
+        self._ptt_btn.setChecked(not continuous)
+        self._cont_btn.setChecked(continuous)
+
+    def showEvent(self, event):
+        """Refresh the Voice PE mode buttons whenever the window is shown —
+        the daemon's manager may only have come up after construction."""
+        super().showEvent(event)
+        try:
+            self._refresh_mode_buttons()
+        except Exception:
+            pass
 
     def set_expression(self, expression: Expression):
         """Set the face expression."""
         self.face.set_expression(expression)
+
+    def update_presence_mode(self, mode: str, label: str) -> None:
+        """Update the presence mode indicator label."""
+        self._presence_label.setText(f"Mode: {mode.capitalize()} ({label})")

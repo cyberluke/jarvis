@@ -9,7 +9,7 @@ $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 $REPO_ROOT  = (Resolve-Path (Join-Path $SCRIPT_DIR '..')).Path
 Set-Location $REPO_ROOT
 
-$BUNDLED_EXE   = Join-Path $REPO_ROOT 'dist\Jarvis\Jarvis.exe'
+$BUNDLED_EXE   = Join-Path $REPO_ROOT 'dist\Toastovac\Toastovac.exe'
 $NATIVE_BUILD  = Join-Path $REPO_ROOT 'build\native_audio_engine'
 $NATIVE_DEBUG  = Join-Path $NATIVE_BUILD 'Debug\jarvis_audio_engine.dll'
 $NATIVE_REL    = Join-Path $NATIVE_BUILD 'Release\jarvis_audio_engine.dll'
@@ -126,10 +126,10 @@ if (-not (Test-Path -LiteralPath $PKG_INF -PathType Leaf)) {
 }
 # Copy the staged package + broker/install exes into the dist so the bundle
 # (and the idempotent bootstrapper) share one folder.
-$DIST     = Join-Path $REPO_ROOT 'dist\Jarvis'
+$DIST     = Join-Path $REPO_ROOT 'dist\Toastovac'
 $DIST_INT = Join-Path $DIST '_internal'
 if (Test-Path -LiteralPath $DIST -PathType Container) {
-    Info 'Staging virtual-mic artifacts into dist\Jarvis'
+    Info 'Staging virtual-mic artifacts into dist\Toastovac'
     foreach ($src in @(
             (Join-Path $VM_PKG 'ToustovacVirtualMic.inf'),
             (Join-Path $VM_PKG 'ToustovacVirtualMic.sys'),
@@ -144,6 +144,21 @@ if (Test-Path -LiteralPath $DIST -PathType Container) {
     }
 }
 
+# --- 1d. Everywhere native host (dotnet, cached) -----------------------------
+$EV_EXE = Join-Path $REPO_ROOT 'build\everywhere_host\Toastovac.Everywhere.Host.exe'
+if ($Rebuild -or -not (Test-Path -LiteralPath $EV_EXE -PathType Leaf)) {
+    if (Get-Command dotnet -ErrorAction SilentlyContinue) {
+        Info 'Building Everywhere native host (dotnet publish)'
+        & dotnet publish "$REPO_ROOT\native\Toastovac.Everywhere.Host\Toastovac.Everywhere.Host.csproj" `
+            -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true `
+            -o (Join-Path $REPO_ROOT 'build\everywhere_host')
+        if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
+        Info ('Everywhere host = ' + $EV_EXE)
+    } else {
+        Info 'dotnet not on PATH - Everywhere host skipped (install .NET 10 SDK to build it)'
+    }
+}
+
 # --- 2. PyInstaller bundle of the desktop app (Jarvis.exe) ------------------
 if ($Rebuild -or -not (Test-Path -LiteralPath $BUNDLED_EXE -PathType Leaf)) {
     Info 'Running PyInstaller (jarvis_desktop.spec)'
@@ -152,7 +167,7 @@ if ($Rebuild -or -not (Test-Path -LiteralPath $BUNDLED_EXE -PathType Leaf)) {
         throw "PyInstaller failed ($LASTEXITCODE); check jarvis_desktop.spec + installed deps."
     }
 }
-$BUNDLED_DLL = Join-Path $REPO_ROOT 'dist\Jarvis\_internal\jarvis_audio_engine.dll'
+$BUNDLED_DLL = Join-Path $REPO_ROOT 'dist\Toastovac\_internal\jarvis_audio_engine.dll'
 if (-not (Test-Path -LiteralPath $BUNDLED_DLL -PathType Leaf)) {
     Info 'Bundling DLL into the onedir dist'
     Copy-Item -LiteralPath $DLL -Destination $BUNDLED_DLL -Force

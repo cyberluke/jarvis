@@ -238,6 +238,8 @@ class OllamaBackend(LLMBackend):
         extra_options: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         thinking: bool = False,
+        on_token: Optional[Callable[[str], None]] = None,
+        stream: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Send an arbitrary messages array to Ollama and return the
         raw response JSON. Caller is responsible for interpreting
@@ -248,12 +250,15 @@ class OllamaBackend(LLMBackend):
         overflow and force Ollama to truncate the tool schema — small
         models like ``gemma4:e2b`` then fall back to pre-trained
         ``tool_code`` scaffolding instead of producing valid tool calls.
-        """
+
+        If ``stream`` is True, ``on_token`` is called for each text chunk
+        received during the response generation. The method still returns
+        the full response dict upon completion."""
         sanitised = strip_nonstandard_message_fields(messages)
         payload: Dict[str, Any] = {
             "model": chat_model,
             "messages": sanitised,
-            "stream": False,
+            "stream": stream,
             "cache_prompt": True,
             "options": {"num_ctx": 8192},
             "think": thinking,
@@ -282,6 +287,64 @@ class OllamaBackend(LLMBackend):
 
         if tools and isinstance(tools, list) and len(tools) > 0:
             payload["tools"] = tools
+
+        # Streaming path: drive ``on_token`` per JSON-lines chunk and return
+        # an Ollama-shaped dict assembled from the deltas so the engine's
+        # existing ``message``/``tool_calls`` parsing stays unchanged.
+        if stream:
+            full_response: List[str] = []
+            tool_calls_payload: Any = None
+            thinking_parts: List[str] = []
+            try:
+                with requests.post(
+                    f"{self._base_url}/api/chat",
+                    json=payload,
+                    timeout=timeout_sec,
+                    stream=True,
+                ) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(data, dict):
+                            continue
+                        message = data.get("message")
+                        if isinstance(message, dict):
+                            content = message.get("content", "")
+                            if isinstance(content, str) and content:
+                                full_response.append(content)
+                                if on_token:
+                                    on_token(content)
+                            think_value = message.get("thinking")
+                            if isinstance(think_value, str) and think_value:
+                                thinking_parts.append(think_value)
+                            if isinstance(message.get("tool_calls"), list):
+                                tool_calls_payload = message["tool_calls"]
+                        if data.get("done"):
+                            break
+            except requests.exceptions.Timeout:
+                print("  ⏱️ LLM request timed out", flush=True)
+                return None
+            except requests.exceptions.ConnectionError:
+                print("  ❌ LLM connection error", flush=True)
+                raise
+            except Exception as e:
+                print(f"  ❌ LLM error ({type(e).__name__})", flush=True)
+                return None
+
+            message_block: Dict[str, Any] = {
+                "role": "assistant",
+                "content": "".join(full_response),
+            }
+            if thinking_parts:
+                message_block["thinking"] = "".join(thinking_parts)
+            if tool_calls_payload:
+                message_block["tool_calls"] = tool_calls_payload
+            return {"message": message_block}
 
         try:
             with requests.post(

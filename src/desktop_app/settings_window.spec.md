@@ -175,3 +175,9 @@ These fields are managed elsewhere or are too complex for a simple form:
 - `voice_debug` — environment variable only
 - `whisper_min_audio_duration` / `whisper_min_word_length` — rarely changed advanced params
 - `vad_frame_ms` / `vad_pre_roll_ms` — low-level VAD timing
+
+## Speech Recognition (Whisper) Notes
+
+- `whisper_backend` choices: Auto, MLX (Apple Silicon), Faster Whisper, **OpenVINO (Intel NPU)**.
+- OpenVINO-specific controls appear as canonical fields: `whisper_openvino_precision` (visible labels **OpenVINO INT8 (recommended)** / **OpenVINO FP16**), `whisper_openvino_device` (NPU default; CPU/GPU explicit), `whisper_openvino_runtime_source` (installed tree / owner wheel), plus optional `whisper_openvino_runtime_root` and `whisper_openvino_python`. `whisper_device` / `whisper_compute_type` stay the faster-whisper settings and are irrelevant when OpenVINO is selected.
+- The save-and-restart daemon flow is reused; immediate hot-swap is not required. Saving without restart shows **saved selection pending restart** separately from the active backend/model/precision (the daemon's loaded-model line is the active identity). NPU is only reported active after worker initialization and device verification succeed; failures keep the requested configuration and surface an actionable code (`OV_RUNTIME_NOT_FOUND`, `OV_NPU_UNAVAILABLE`, `OV_COMPANION_MISSING`, `OV_WHISPER_METRICS_UNAVAILABLE`, `OV_WHISPER_PAIR_UNSUPPORTED`, …) without a silent fallback.

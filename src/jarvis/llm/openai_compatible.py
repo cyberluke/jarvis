@@ -42,7 +42,11 @@ _RETRYABLE_GENERATION_STATUS = frozenset({429, 502, 503, 504})
 
 
 def _serialised_request(method):
-    """Run one request at a time against a single-slot llama.cpp server."""
+    """Run up to N requests concurrently against the multi-slot llama.cpp server.
+
+    The gate is a semaphore of ``self._request_gate_limit`` slots (default 4,
+    matching the server's parallel-request setting), so independent requests
+    (translate, embed, judge) overlap instead of queuing behind each other."""
 
     @functools.wraps(method)
     def wrapped(self, *args, **kwargs):
@@ -50,8 +54,9 @@ def _serialised_request(method):
         with self._request_gate:
             wait_ms = (time.monotonic() - queued_at) * 1000.0
             if wait_ms >= 25.0:
+                limit = getattr(self, "_request_gate_limit", 1)
                 debug_log(
-                    f"LLM single-slot gate: {method.__name__} waited {wait_ms:.1f} ms",
+                    f"LLM gate ({limit} slots): {method.__name__} waited {wait_ms:.1f} ms",
                     "llm",
                 )
             return method(self, *args, **kwargs)
@@ -129,7 +134,17 @@ class OpenAICompatibleBackend(LLMBackend):
     def __init__(self, base_url: str, api_key: Optional[str] = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key or None
-        self._request_gate = threading.RLock()
+        # Parallel-request gate: LM Studio / llama.cpp now allows N concurrent
+        # slots (configured server-side). A semaphore of N lets that many
+        # requests run at once instead of serializing everything. Default 4 to
+        # match the current server setting; override with JARVIS_LLM_PARALLEL.
+        import os
+        try:
+            parallel = max(1, int(os.environ.get("JARVIS_LLM_PARALLEL", "4")))
+        except ValueError:
+            parallel = 4
+        self._request_gate = threading.Semaphore(parallel)
+        self._request_gate_limit = parallel
         self._session = requests.Session()
         self._models_cache: List[str] = []
         self._models_cache_at = 0.0
@@ -241,11 +256,11 @@ class OpenAICompatibleBackend(LLMBackend):
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> Optional[str]:
-        # ``num_ctx`` and ``thinking`` have no equivalent in the OpenAI
-        # shape; servers that need a fixed context window configure it
-        # at load time, and reasoning is a model attribute rather than
-        # a request flag. Both are accepted for signature parity with
-        # OllamaBackend and silently ignored here.
+        # ``num_ctx`` has no OpenAI equivalent (context is a load-time server
+        # setting). ``thinking`` DOES map: llama.cpp/LM Studio reasoning models
+        # (gemma4, qwen3) accept ``chat_template_kwargs.enable_thinking`` —
+        # False disables the chain-of-thought so the answer comes straight
+        # (the main latency win for fast actions like translate/rewrite).
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -255,6 +270,8 @@ class OpenAICompatibleBackend(LLMBackend):
             "messages": messages,
             "stream": False,
         }
+        if not thinking:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         if temperature is not None:
             payload["temperature"] = temperature
         if max_tokens is not None:
@@ -311,6 +328,8 @@ class OpenAICompatibleBackend(LLMBackend):
             "messages": messages,
             "stream": True,
         }
+        if not thinking:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         try:
             with self._post_generation(
@@ -392,6 +411,8 @@ class OpenAICompatibleBackend(LLMBackend):
         extra_options: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         thinking: bool = False,
+        on_token: Optional[Callable[[str], None]] = None,
+        stream: bool = False,
     ) -> Optional[Dict[str, Any]]:
         sanitised = strip_nonstandard_message_fields(messages)
         sanitised = self._encode_tool_call_arguments(sanitised)
@@ -422,6 +443,39 @@ class OpenAICompatibleBackend(LLMBackend):
             payload["tools"] = tools
 
         try:
+            if stream:
+                full_response: List[str] = []
+                with self._post_generation(payload, timeout_sec=timeout_sec, stream=True) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        payload_str = line.decode("utf-8", errors="ignore").strip()
+                        if not payload_str.startswith("data:"):
+                            continue
+                        payload_str = payload_str[len("data:"):].strip()
+                        if payload_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload_str)
+                            choices = chunk.get("choices")
+                            if isinstance(choices, list) and choices:
+                                delta = choices[0].get("delta")
+                                if isinstance(delta, dict):
+                                    content = delta.get("content")
+                                    if not content:
+                                        content = delta.get("reasoning_content")
+                                    if isinstance(content, str) and content:
+                                        full_response.append(content)
+                                        if on_token:
+                                            on_token(content)
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                result = "".join(full_response)
+                # Even in stream mode, we return the full response dict for consistency
+                # as per the interface contract.
+                return {"message": {"content": result, "role": "assistant"}}
+
             with self._post_generation(payload, timeout_sec=timeout_sec) as resp:
                 resp.raise_for_status()
                 data = resp.json()

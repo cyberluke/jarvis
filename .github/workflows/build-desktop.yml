@@ -48,12 +48,25 @@ jobs:
           "@ | Out-File -FilePath src/jarvis/_version.py -Encoding utf8
           Write-Host "Generated version file with VERSION=${{ inputs.version }}, RELEASE_CHANNEL=${{ inputs.channel }}"
 
+      - name: 🧰 Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           Get-Content requirements.txt | Where-Object { $_ -notmatch '^(chatterbox-tts|mlx-whisper|nvidia-)' } | Set-Content requirements-desktop.txt
           pip install -r requirements-desktop.txt
           pip install pyinstaller
+
+      - name: 🖥️ Build Everywhere native host (WinUI 3)
+        # Toastovac.Everywhere.Host.exe is staged under build\everywhere_host
+        # so jarvis_desktop.spec bundles it into the onedir output.
+        run: |
+          dotnet publish native\Toastovac.Everywhere.Host\Toastovac.Everywhere.Host.csproj `
+            -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true `
+            -o build\everywhere_host
 
       - name: 🎨 Generate icons
         run: |
@@ -67,16 +80,16 @@ jobs:
         if: inputs.smoke_test
         shell: pwsh
         run: |
-          Write-Host "=== Smoke Test: Jarvis Desktop (Windows) ==="
+          Write-Host "=== Smoke Test: Toastovac Desktop (Windows) ==="
           # GUI-subsystem (console=False) executables do not attach to
           # PowerShell's console: `& app.exe 2>&1` captures no output and
           # leaves $LASTEXITCODE empty, so the smoke test always "failed"
           # regardless of the app's real result. Start-Process -PassThru
           # exposes the true exit code, and -RedirectStandardOutput/-Error
           # give the app real stdout/stderr handles to write into.
-          $outFile = Join-Path $env:RUNNER_TEMP "jarvis-smoke-stdout.txt"
-          $errFile = Join-Path $env:RUNNER_TEMP "jarvis-smoke-stderr.txt"
-          $process = Start-Process -FilePath "dist\Jarvis\Jarvis.exe" `
+          $outFile = Join-Path $env:RUNNER_TEMP "toastovac-smoke-stdout.txt"
+          $errFile = Join-Path $env:RUNNER_TEMP "toastovac-smoke-stderr.txt"
+          $process = Start-Process -FilePath "dist\Toastovac\Toastovac.exe" `
             -ArgumentList "--smoke-test" `
             -Wait -PassThru `
             -RedirectStandardOutput $outFile `
@@ -102,19 +115,19 @@ jobs:
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="${{ inputs.version }}" installer\windows\jarvis_setup.iss
 
-      - name: 📦 Package installer as Jarvis-Windows-x64.zip
+      - name: 📦 Package installer as Toastovac-Windows-x64.zip
         if: always()
         run: |
-          Copy-Item dist\Jarvis-Setup-x64.exe dist\Jarvis.exe
+          Copy-Item dist\Toastovac-Setup-x64.exe dist\Toastovac.exe
           cd dist
-          Compress-Archive -Path Jarvis.exe -DestinationPath Jarvis-Windows-x64.zip
+          Compress-Archive -Path Toastovac.exe -DestinationPath Toastovac-Windows-x64.zip
 
       - name: 📤 Upload Windows artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: Jarvis-Windows
-          path: dist/Jarvis-Windows-x64.zip
+          name: Toastovac-Windows
+          path: dist/Toastovac-Windows-x64.zip
 
   # ── macOS: build + optional smoke test (arm64 + x64) ────────────────────
   build-macos:

@@ -53,10 +53,43 @@ if ($aeDll) {
     Write-Host "Native audio engine built: $($aeDll[0])"
 }
 
+# Everywhere native host (Toastovac.Everywhere.Host.exe, WinUI 3). Cached
+# like the other native artifacts: rebuilt only when the exe is missing.
+# Requires the .NET 10 SDK (auto-installed via winget below when absent).
+# Staged under build\ (preserved across the dist\ clean) so jarvis_desktop.spec
+# can bundle it into the onedir folder.
+$evExe = "$PWD\build\everywhere_host\Toastovac.Everywhere.Host.exe"
+if (Test-Path -LiteralPath $evExe) {
+    Write-Host "Everywhere host cached: $evExe - skipping dotnet build"
+} else {
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    $dotnet10 = $dotnet -and (dotnet --list-sdks 2>$null | Where-Object { $_ -match '^10\.' })
+    if (-not $dotnet10) {
+        # Fire-and-forget toolchain: install the .NET 10 SDK via winget, then
+        # refresh PATH in this process so the build continues unattended.
+        Write-Host "dotnet 10 SDK missing - installing via winget"
+        & winget install Microsoft.DotNet.SDK.10 --accept-package-agreements `
+            --accept-source-agreements --disable-interactivity
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "winget .NET 10 SDK install failed ($LASTEXITCODE)"
+            exit $LASTEXITCODE
+        }
+        $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + `
+            ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+        $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+        if (-not $dotnet) { Write-Host "dotnet still not on PATH after install"; exit 1 }
+    }
+    & dotnet publish "$PWD\native\Toastovac.Everywhere.Host\Toastovac.Everywhere.Host.csproj" `
+        -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true `
+        -o "$PWD\build\everywhere_host"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "Everywhere host built: $evExe"
+}
+
 # No test run here: pytest is 1 (skip) or 5 (no tests), both non-zero by design.
 & "$PSScriptRoot\..\.venv-openvino-npu\Scripts\python.exe" -W ignore -m PyInstaller --noconfirm jarvis_desktop.spec
 $pyi = $LASTEXITCODE
 if ($pyi -ne 0) { exit $pyi }
 
-& .\dist\Jarvis\Jarvis.exe --smoke-test
+& .\dist\Toastovac\Toastovac.exe --smoke-test
 exit $LASTEXITCODE

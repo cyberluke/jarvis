@@ -186,7 +186,7 @@ def get_platform_asset_name() -> str:
             return "Jarvis-macOS-arm64.zip"
         return "Jarvis-macOS-x64.zip"
     elif sys.platform == "win32":
-        return "Jarvis-Windows-x64.zip"
+        return "Toastovac-Windows-x64.zip"
     else:
         return "Jarvis-Linux-x64.tar.gz"
 
@@ -534,7 +534,7 @@ def install_update_windows(download_path: Path) -> bool:
     """Install update on Windows.
 
     Strategy:
-    1. Extract zip to temp location (contains Inno Setup installer as Jarvis.exe)
+    1. Extract zip to temp location (contains Inno Setup installer as Toastovac.exe)
     2. Create batch script to:
        - Wait for current process to actually exit (by PID)
        - Run the installer silently (upgrades in place to Program Files)
@@ -554,10 +554,10 @@ def install_update_windows(download_path: Path) -> bool:
         with zipfile.ZipFile(download_path, "r") as zf:
             zf.extractall(temp_dir)
 
-        new_exe_path = temp_dir / "Jarvis.exe"
+        new_exe_path = temp_dir / "Toastovac.exe"
 
         if not new_exe_path.exists():
-            raise FileNotFoundError("Jarvis.exe not found in download")
+            raise FileNotFoundError("Toastovac.exe not found in download")
 
         escaped_new_exe = _escape_batch_path(new_exe_path)
 
@@ -571,7 +571,7 @@ def install_update_windows(download_path: Path) -> bool:
         # step is still skipped under /SILENT (skipifsilent), so we relaunch
         # the upgraded exe ourselves.
         batch_content = f'''@echo off
-echo Updating Jarvis...
+echo Updating Toastovac...
 echo Waiting for process {current_pid} to exit...
 :wait_loop
 tasklist /fi "pid eq {current_pid}" 2>nul | find "{current_pid}" >nul
@@ -581,7 +581,7 @@ if not errorlevel 1 (
 )
 echo Process exited, running installer...
 "{escaped_new_exe}" /SILENT /SUPPRESSMSGBOXES /NORESTART
-echo Launching updated Jarvis...
+echo Launching updated Toastovac...
 start "" "{escaped_installed_exe}"
 rmdir /s /q "{escaped_temp}"
 '''

@@ -28,6 +28,9 @@ Plugins = PyQt6/Qt6/plugins
 # Manual collection can conflict with hooks and cause crashes
 datas = [
     (str(src_path / 'desktop_app' / 'desktop_assets' / '*.png'), 'desktop_app/desktop_assets'),
+    # The isolated OpenVINO speech worker runs under the external CPython 3.13
+    # x64 interpreter as a plain script; ship its source next to the modules.
+    (str(src_path / 'jarvis' / 'listening' / 'openvino_worker.py'), 'jarvis/listening'),
 ]
 
 # Offline IP geolocation used by weather defaults. The runtime resolver checks
@@ -51,6 +54,17 @@ for _ae_dll in (_ae_dll_debug, _ae_dll_release):
         break
 else:
     print("Native audio engine DLL not built - run scripts/run_windows.ps1 or scripts/build_one.ps1 first")
+
+# Toustovač Everywhere native host (WinUI 3 companion process, owns
+# hotkeys/UIA/overlay). Built by scripts/build_one.ps1 via `dotnet publish`
+# into build/everywhere_host (preserved across the dist\ clean); staged flat
+# next to Jarvis.exe so the broker can spawn it. Bundled only when present.
+_ev_exe = project_root / 'build' / 'everywhere_host' / 'Toastovac.Everywhere.Host.exe'
+if _ev_exe.is_file():
+    datas.append((str(_ev_exe), '.'))
+    print(f"Bundling Everywhere native host: {_ev_exe}")
+else:
+    print("Everywhere native host not built - run scripts/build_one.ps1")
 
 # Toustovač Clean Microphone stack — the WDK driver package plus the broker
 # and the idempotent bootstrapper. The daemon drives first-run/in-place
@@ -145,6 +159,20 @@ if _hunspell_root.exists():
         datas.append((str(_hunspell_root / 'SOURCES.md'), 'jarvis/resources/hunspell'))
     print(f"Bundling Hunspell dictionaries from {_hunspell_root}")
 
+# OneOCR model bundle: the runtime is fully self-contained — the manifest,
+# the 11 .onnx models and the 9 vocab .txt files ship inside the package.
+# Explicit inclusion (no package-data auto-discovery): the engine resolves
+# exactly ``jarvis/_vendor/oneocr/assets`` relative to its own module.
+_oneocr_assets = src_path / 'jarvis' / '_vendor' / 'oneocr' / 'assets'
+if _oneocr_assets.is_dir():
+    datas.append((str(_oneocr_assets), 'jarvis/_vendor/oneocr/assets'))
+    _n_onnx = sum(1 for p in _oneocr_assets.rglob('*.onnx'))
+    _n_txt = sum(1 for p in _oneocr_assets.rglob('*.txt'))
+    print(f"Bundling OneOCR assets: {_n_onnx} .onnx, {_n_txt} .txt, "
+          f"manifest.json from {_oneocr_assets}")
+else:
+    print("OneOCR assets not found — run python tools/oneocr/prepare_assets.py")
+
 # Note: Qt WebEngine resources are handled by PyInstaller's hook-PyQt6.QtWebEngineWidgets.py
 # Manual collection can conflict with the hook and cause crashes
 
@@ -193,6 +221,12 @@ hiddenimports = [
     'jarvis.listening',
     'jarvis.listening.echo_detection',
     'jarvis.listening.listener',
+    # OpenVINO speech backend: shared catalog + runtime discovery + adapter +
+    # isolated worker entry. The worker imports the native OpenVINO/GenAI
+    # libraries; the desktop interpreter keeps only these pure-Python modules.
+    'jarvis.listening.openvino_models',
+    'jarvis.listening.openvino_runtime',
+    'jarvis.listening.openvino_whisper',
     'jarvis.listening.state_manager',
     'jarvis.listening.wake_detection',
     'jarvis.listening.transcript_buffer',
@@ -223,6 +257,21 @@ hiddenimports = [
     'onnxruntime',
     'onnxruntime.capi',
     'onnxruntime.capi._pybind_state',
+    # OneOCR vendored runtime + Jarvis OCR contract layer
+    'jarvis._vendor',
+    'jarvis._vendor.oneocr',
+    'jarvis._vendor.oneocr.common',
+    'jarvis._vendor.oneocr.vocab',
+    'jarvis._vendor.oneocr.detector',
+    'jarvis._vendor.oneocr.classifier',
+    'jarvis._vendor.oneocr.recognizer',
+    'jarvis._vendor.oneocr.corrector',
+    'jarvis._vendor.oneocr.engine',
+    'jarvis.vision',
+    'jarvis.vision.ocr',
+    'jarvis.vision.ocr.base',
+    'jarvis.vision.ocr.result',
+    'jarvis.vision.ocr.oneocr_backend',
     # Profile modules
     # Reply modules
     'jarvis.reply',
@@ -608,13 +657,14 @@ if sys.platform == 'darwin':
 elif sys.platform == 'win32':
     # Windows: Create onedir distribution (directory with EXE + DLLs alongside)
     # This avoids the VC++ runtime DLL conflicts that plague onefile mode and
-    # enables packaging via Inno Setup installer.
+    # enables packaging via Inno Setup installer. The Windows product name is
+    # Toastovac (Toastovac.exe in dist\Toastovac\).
     exe = EXE(
         pyz,
         a.scripts,
         [],
         exclude_binaries=True,
-        name='Jarvis',
+        name='Toastovac',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -636,7 +686,7 @@ elif sys.platform == 'win32':
         strip=False,
         upx=True,
         upx_exclude=[],
-        name='Jarvis',
+        name='Toastovac',
     )
 
 else:

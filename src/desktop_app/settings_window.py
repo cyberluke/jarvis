@@ -70,6 +70,8 @@ CATEGORIES = [
     ("memory", "🧠 Memory & Dialogue"),
     ("location", "📍 Location"),
     ("features", "✨ Features"),
+    ("terminal", "⌨️ Terminal Composer"),
+    ("everywhere", "🪟 Everywhere"),
     ("mcps", "🔌 MCP Servers"),
     ("advanced", "🔧 Advanced"),
 ]
@@ -334,10 +336,33 @@ def _build_field_metadata() -> List[FieldMeta]:
                ("distil-large-v3", "Distil Large v3"),
                ("distil-medium.en", "Distil Medium English")])
     f("whisper_backend", "Backend",
-      "Speech recognition backend",
+      "Speech recognition backend. OpenVINO runs the IR Whisper models in an "
+      "isolated CPython 3.13 x64 worker on the selected device.",
       "whisper", "choice",
       choices=[("auto", "Auto"), ("mlx", "MLX (Apple Silicon)"),
-               ("faster-whisper", "Faster Whisper")])
+               ("faster-whisper", "Faster Whisper"),
+               ("openvino", "OpenVINO (Intel NPU)")])
+    f("whisper_openvino_precision", "OpenVINO Artifact Precision",
+      "Artifact selection for the OpenVINO IR catalog: INT8 weight-compressed "
+      "(recommended) or FP16. Both persist and take effect on the next start.",
+      "whisper", "choice",
+      choices=[("int8", "OpenVINO INT8 (recommended)"), ("fp16", "OpenVINO FP16")])
+    f("whisper_openvino_device", "OpenVINO Device",
+      "Explicit inference target for the OpenVINO pipeline.",
+      "whisper", "choice",
+      choices=[("NPU", "NPU (recommended)"), ("CPU", "CPU"), ("GPU", "GPU")])
+    f("whisper_openvino_runtime_source", "OpenVINO Runtime Source",
+      "How the worker finds the runtime: the installed tree (registry / "
+      "setupvars layout) or the exact owner-supplied cp313 wheels.",
+      "whisper", "choice",
+      choices=[("installed", "Installed tree"), ("wheel", "Owner wheel")])
+    f("whisper_openvino_runtime_root", "OpenVINO Runtime Root",
+      "Optional installed-root override; empty means installer discovery.",
+      "whisper", "str", nullable=True)
+    f("whisper_openvino_python", "OpenVINO Worker Interpreter",
+      "Optional CPython 3.13 x64 worker-interpreter override; empty means "
+      "discover the managed compatible worker.",
+      "whisper", "str", nullable=True)
     f("whisper_device", "Compute Device",
       "Device for Whisper inference",
       "whisper", "choice",
@@ -483,6 +508,147 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("dictation_custom_dictionary", "Custom Dictionary",
       "Correction rules for dictation. Use 'wrong -> right' format (e.g. 'Jarvice -> Jarvis')",
       "features", "list")
+
+    # --- Terminal Command Composer ---
+    f("terminal_composer_enabled", "Enable Terminal Composer",
+      "Prepare one command line for the focused terminal (Enter stays manual)",
+      "terminal", "bool")
+    f("terminal_composer_require_focus_proof", "Require Focus Proof",
+      "Insert only when UIA focus is proven inside the terminal control",
+      "terminal", "bool")
+    f("terminal_command_memory_ttl_s", "Command Memory TTL",
+      "Seconds that terminal-session entities stay available",
+      "terminal", "float", min_val=30, max_val=86400, step=30, suffix="s")
+    f("terminal_output_capture_enabled", "Capture Terminal Output",
+      "Observe executed command output for entity memory (redacted in logs)",
+      "terminal", "bool")
+    f("terminal_output_max_bytes", "Output Max Bytes",
+      "Per-execution output cap before sanitization",
+      "terminal", "int", min_val=1024, max_val=262144, step=1024)
+    f("terminal_output_max_lines", "Output Max Lines",
+      "Per-execution line cap (small head + bounded tail)",
+      "terminal", "int", min_val=20, max_val=2000, step=20)
+    f("terminal_destructive_confirmation", "Destructive Confirmation",
+      "Ask before inserting destructive / unknown-risk commands",
+      "terminal", "bool")
+    f("terminal_clipboard_restore", "Restore Clipboard",
+      "Put the previous clipboard back after paste when nobody changed it",
+      "terminal", "bool")
+    f("terminal_windows_terminal_paste", "Windows Terminal Paste",
+      "Paste gesture for Windows Terminal",
+      "terminal", "choice",
+      choices=[("ctrl_shift_v", "Ctrl+Shift+V"), ("ctrl_v", "Ctrl+V")])
+    f("terminal_conhost_paste", "Classic Console Paste",
+      "Paste gesture for classic console / PowerShell",
+      "terminal", "choice",
+      choices=[("ctrl_v", "Ctrl+V"), ("ctrl_shift_v", "Ctrl+Shift+V")])
+    f("terminal_unknown_shell_policy", "Unknown Shell Policy",
+      "reject = insert nothing when the shell cannot be proven",
+      "terminal", "choice", choices=[("reject", "reject")])
+    f("terminal_bridge_pipe_name", "Bridge Pipe Name",
+      "Current-user named pipe for the terminal bridge",
+      "terminal", "str")
+
+    # --- Everywhere (OS-wide AI text interaction plane) ---
+    f("everywhere_enabled", "Enable Everywhere",
+      "OS-wide selection actions: rewrite, proofread, alternatives, "
+      "explain, translate, saved prompts, Alt+drag OCR",
+      "everywhere", "bool")
+    f("everywhere_toolbar_follows_selection", "Toolbar Follows Selection",
+      "Anchor the toolbar at the selection/caret rectangle",
+      "everywhere", "bool")
+    f("everywhere_passive_toolbar", "Passive Toolbar",
+      "Show the toolbar automatically next to a fresh selection",
+      "everywhere", "bool")
+    f("everywhere_alternatives_min", "Alternatives Min",
+      "Lower bound for generated alternatives",
+      "everywhere", "int", min_val=1, max_val=15, step=1)
+    f("everywhere_alternatives_max", "Alternatives Max",
+      "Upper bound for generated alternatives",
+      "everywhere", "int", min_val=1, max_val=15, step=1)
+    f("everywhere_alternatives_count", "Alternatives Count",
+      "Alternatives generated per request",
+      "everywhere", "int", min_val=1, max_val=15, step=1)
+    f("everywhere_fix_all_min_confidence", "Fix All Min Confidence",
+      "Proofread issues below this confidence need explicit accept",
+      "everywhere", "float", min_val=0.0, max_val=1.0, step=0.05)
+    f("everywhere_translate_default_language", "Default Target Language",
+      "Default translation target (ISO code, e.g. cs, vi, en)",
+      "everywhere", "str")
+    f("everywhere_ocr_backend", "OCR Backend",
+      "windows-ai = modern Windows AI TextRecognizer; "
+      "windows-media = classic Windows OCR engine; "
+      "oneocr = bundled OneOCR ONNX runtime (self-contained)",
+      "everywhere", "choice",
+      choices=[("windows-ai", "Windows AI (windows-ai)"),
+               ("windows-media", "Windows.Media OCR (windows-media)"),
+               ("oneocr", "OneOCR ONNX (oneocr)")])
+    f("everywhere_ocr_provider", "OneOCR ONNX Provider",
+      "Single explicit ONNX Runtime provider for OneOCR (no fallback): "
+      "cpu, directml, cuda or openvino",
+      "everywhere", "choice",
+      choices=[("cpu", "CPU"), ("directml", "DirectML"),
+               ("cuda", "CUDA"), ("openvino", "OpenVINO")])
+    f("everywhere_screen_reading_modifier", "Screen Reading Modifier",
+      "Modifier held while dragging the OCR capture rectangle",
+      "everywhere", "choice",
+      choices=[("alt", "Alt"), ("ctrl", "Ctrl")])
+    f("everywhere_screen_reading_suppress_native", "Suppress Native Drag",
+      "Arm the capture gesture only while the modifier is held",
+      "everywhere", "bool")
+    f("everywhere_replace_policy", "Replacement Provider Policy",
+      "provider-first keeps VSIX/terminal semantics; copy-only never edits",
+      "everywhere", "choice",
+      choices=[("provider-first", "Provider-first (recommended)"),
+               ("unicode-input", "Unicode input only"),
+               ("clipboard-transaction", "Clipboard transaction"),
+               ("copy-only", "Copy only")])
+    f("everywhere_debug", "Debug Diagnostics",
+      "Log full selected text in debug output (default: hashes/lengths only)",
+      "everywhere", "bool")
+    # Hotkey slots (all configurable; collisions surface as HOTKEY_CONFLICT)
+    from jarvis.config import EVERYWHERE_DEFAULT_HOTKEYS
+    _hotkey_labels = {
+        "toolbar": "Toolbar Shortcut",
+        "rewrite": "Rewrite Shortcut",
+        "proofread": "Proofread Shortcut",
+        "alternatives": "Alternatives Shortcut",
+        "explain": "Explain Shortcut",
+        "translate": "Translate Shortcut",
+        "prompt": "Use Prompt Shortcut",
+        "ocr": "OCR Capture Gesture",
+        "help": "Shortcut Help Key",
+        "cancel": "Cancel / Dismiss Key",
+    }
+    for _slot, _default in EVERYWHERE_DEFAULT_HOTKEYS.items():
+        f(f"everywhere_hotkey_{_slot}", _hotkey_labels.get(_slot, _slot),
+          f"Default: {_default}", "everywhere", "str")
+    # Editable action prompts
+    _prompt_labels = {
+        "rewrite": "Rewrite Prompt",
+        "proofread": "Proofread Prompt",
+        "alternatives": "Alternatives Prompt",
+        "explain": "Explain Prompt",
+        "translate": "Translate Prompt",
+    }
+    for _slot, _label in _prompt_labels.items():
+        f(f"everywhere_prompt_{_slot}", _label,
+          "Leave empty for the built-in default", "everywhere", "str",
+          nullable=True)
+    # Per-action model profiles
+    from jarvis.config import EVERYWHERE_DEFAULT_PROFILES
+    _profile_choices = [
+        ("fast-edit", "fast-edit (small, warm)"),
+        ("structured-edit", "structured-edit (small, strict JSON)"),
+        ("creative-edit", "creative-edit (chat model)"),
+        ("reasoning", "reasoning (chat model)"),
+        ("translation", "translation (chat model)"),
+        ("user-selected", "user-selected (saved prompt)"),
+    ]
+    for _slot in EVERYWHERE_DEFAULT_PROFILES:
+        f(f"everywhere_profile_{_slot}", f"Profile: {_slot}",
+          "Model profile for this action", "everywhere", "choice",
+          choices=_profile_choices)
 
     # --- Voice PE ---
     # Stock firmware mode: "push-to-talk + continued conversation". The first

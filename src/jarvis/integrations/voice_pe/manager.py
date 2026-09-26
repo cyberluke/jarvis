@@ -183,6 +183,22 @@ class SinkFanout:
             device.on_error(code, message, context)
 
 
+def _persist_listening_mode(continuous: bool) -> None:
+    """Write the Voice PE listening mode to config.json so a restart keeps it.
+
+    ``continuous=True`` -> wake words enabled + continued conversation;
+    ``continuous=False`` -> push-to-talk (wake words off)."""
+    try:
+        from jarvis.config import _load_json, _save_json, default_config_path
+        path = default_config_path()
+        data = _load_json(path)
+        data["voice_pe_disable_wake_words"] = not continuous
+        data["voice_pe_continued_conversation"] = bool(continuous)
+        _save_json(path, data)
+    except Exception as exc:
+        debug_log(f"voice_pe: persist listening mode failed: {exc}", "voice")
+
+
 class VoicePEManager:
     """Owns the event loop thread and the per-device connections."""
 
@@ -419,6 +435,18 @@ class VoicePEManager:
         device.actions.register("toggle_overlay", _toggle_overlay)
         device.actions.register("open_command_palette", _open_command_palette)
         device.actions.register("ignore", _ignore_action)
+        device.actions.register("commit_utterance", self._commit_utterance)
+
+    def _commit_utterance(self) -> None:
+        """Centre-button commit in continuous mode: force-dispatch the speech
+        collected so far without waiting for the endpoint silence window."""
+        listener = self._listener
+        if listener is None:
+            return
+        try:
+            listener.commit_pending_utterance()
+        except Exception as exc:
+            debug_log(f"voice_pe commit_utterance failed: {exc}", "voice")
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -493,11 +521,19 @@ class VoicePEManager:
         """
         if not text or not str(text).strip():
             return 0
+        # The mirrored remark is an app-generated line in the UI language, not
+        # the last STT-detected language — speak it in the app's voice.
+        try:
+            from jarvis.i18n import current_language
+            ui_lang = current_language()
+        except Exception:
+            ui_lang = None
         mirrored = 0
         for device in self._devices:
             if device.holds_session():
                 continue
-            device.announce_reply(str(text), None, start_conversation=False)
+            device.announce_reply(
+                str(text), None, start_conversation=False, language=ui_lang)
             mirrored += 1
         return mirrored
 
@@ -588,6 +624,26 @@ class VoicePEManager:
             return False
         apply_led(device._client, key_id, device.config, rgb=rgb, brightness=brightness)
         return True
+
+    def set_listening_mode(self, continuous: bool, key: str = "") -> bool:
+        """Switch Voice PE push-to-talk <-> continuous for one/all devices.
+
+        Thread-safe: the device applies the wake-word configuration on the
+        voice_pe loop thread. ``continuous=False`` = push-to-talk (wake words
+        off, centre button opens the session); ``continuous=True`` =
+        continuous (wake words on + mic auto-reopens after each reply).
+        Returns True when at least one device accepted the switch.
+        """
+        targets = [self.device(key)] if key else list(self._devices)
+        applied = False
+        for device in targets:
+            if device is None:
+                continue
+            device.set_listening_mode(continuous)
+            applied = True
+        if applied:
+            _persist_listening_mode(continuous)
+        return applied
 
 
 # ----------------------------------------------------------------------

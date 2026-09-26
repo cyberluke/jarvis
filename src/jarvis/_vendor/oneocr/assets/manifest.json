@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "engine": "oneocr",
+  "upstream": {
+    "repository": "bropines/oneocr-onnx-python",
+    "commit": "75cc12666503425ffd6ea0cb052c0bcaaff21058"
+  },
+  "source": {
+    "product": "Microsoft.ScreenSketch",
+    "package_version": "11.2607.23.0"
+  },
+  "models": {
+    "classifier/script_classifier.onnx": {
+      "sha256": "20f7dfcdc33289aeb45c16fc7b349d7cd8e94d6d531cfe234d31dd637da97ef9",
+      "size": 3456873
+    },
+    "detector/text_detector.onnx": {
+      "sha256": "035ce56dbf49553b72d081ef2b51659ebab919e596d903f5dd892f1a2777c92b",
+      "size": 11545240
+    },
+    "recognizers/recognizer_arabic.onnx": {
+      "sha256": "f5b75bf06ae7cafc971ec1a09a6f8d6e33932471087007b9b9da71567a96d8c2",
+      "size": 3474686
+    },
+    "recognizers/recognizer_cjk.onnx": {
+      "sha256": "ff10bab34f2b1250e32e179aab21218cb05ad8fce972d089b5ccf8c02ab478d0",
+      "size": 13433511
+    },
+    "recognizers/recognizer_cyrillic.onnx": {
+      "sha256": "d6c8c8cb894547225e32a46b91b4025b9e5e0d735b4e88402e9779ba65b55e06",
+      "size": 2073217
+    },
+    "recognizers/recognizer_devanagari.onnx": {
+      "sha256": "51702124827aba276fd5068cb71766c6f1a0008a5a4eb3eded0254921bff2784",
+      "size": 3726743
+    },
+    "recognizers/recognizer_greek.onnx": {
+      "sha256": "2e1deb29f14f68c6a03359bf41a956653279d1bce4f9b6d9d0058c94c1a3c1c2",
+      "size": 3730390
+    },
+    "recognizers/recognizer_hebrew.onnx": {
+      "sha256": "07069ae041e43a9a9aa05699e224f01ac6945457fe4951ab9bb73d510e0a6045",
+      "size": 1737542
+    },
+    "recognizers/recognizer_latin.onnx": {
+      "sha256": "4ad10b28e6f3d296b32f09f76f5cfc254b4c18bcec4a784d25009a5b81671df9",
+      "size": 6579127
+    },
+    "recognizers/recognizer_tamil.onnx": {
+      "sha256": "f88f18d67aaac8f230b99859ad93acf00e0dae1ff0be410020ac7c7daa0db2b1",
+      "size": 1975431
+    },
+    "recognizers/recognizer_thai.onnx": {
+      "sha256": "52600bd18800814813cff1723b8ddede878850117e06c96b25f147cbe16561ed",
+      "size": 3706944
+    },
+    "vocab/vocab_arabic.txt": {
+      "sha256": "9b73bebbc97286dd653852b8e109879cc6d11d67a78c5381abceeac661d78cc0",
+      "size": 1485
+    },
+    "vocab/vocab_cjk.txt": {
+      "sha256": "11f69e2e6173aea046838523010e8097ef81c20f1fce30142ead11cdc5db20c5",
+      "size": 380227
+    },
+    "vocab/vocab_cyrillic.txt": {
+      "sha256": "6a5d02184110d834391002054cce13e7e7a21ab8880d625c21100e3f92f2a7d8",
+      "size": 4855
+    },
+    "vocab/vocab_devanagari.txt": {
+      "sha256": "644de2098190007fb9246c896c350022155d6f5f13fe7658ff614a995518c833",
+      "size": 1654
+    },
+    "vocab/vocab_greek.txt": {
+      "sha256": "3c1d448556ccffff09e5bf215bf644ac7fab71193dab44ddd4a2606db0732dcb",
+      "size": 1993
+    },
+    "vocab/vocab_hebrew.txt": {
+      "sha256": "18e8a9f9d860d1b8f88e82221b27824b96d4a721da501608ecd3051cb0cec8db",
+      "size": 1618
+    },
+    "vocab/vocab_latin.txt": {
+      "sha256": "30f383094965646e07fdd75d36c32072d15ba381532c0cca860517a314227a3e",
+      "size": 3539
+    },
+    "vocab/vocab_tamil.txt": {
+      "sha256": "4fea36a9a0869411bd0ce40b9b0f4e57b168cbba1a84c0a907da71a1e9a42b24",
+      "size": 1479
+    },
+    "vocab/vocab_thai.txt": {
+      "sha256": "c7880f4823a61fd8796a849dd1bb7a1028b1a6233debd02ab896c80522ec27b0",
+      "size": 1677
+    }
+  }
+}

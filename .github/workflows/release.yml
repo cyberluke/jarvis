@@ -109,7 +109,7 @@ jobs:
           # without its binaries is worse than a failed job.
           set -euo pipefail
           missing=0
-          for name in Jarvis-Windows Jarvis-macOS-arm64 Jarvis-macOS-x64 Jarvis-Linux; do
+          for name in Toastovac-Windows Jarvis-macOS-arm64 Jarvis-macOS-x64 Jarvis-Linux; do
             echo "Downloading $name..."
             if ! gh run download ${{ github.run_id }} --repo ${{ github.repository }} \
               --name "$name" \
@@ -147,7 +147,7 @@ jobs:
             ### 📦 Downloads
             | Platform | File | Notes |
             |----------|------|-------|
-            | **Windows** | `Jarvis-Windows-x64.zip` | Extract → Run `Jarvis.exe` |
+            | **Windows** | `Toastovac-Windows-x64.zip` | Extract → Run `Toastovac.exe` |
             | **macOS (Apple Silicon)** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
             | **macOS (Intel)** | `Jarvis-macOS-x64.zip` | Extract → Move to Applications → Right-click → Open |
             | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |
@@ -293,7 +293,7 @@ jobs:
             ### 📦 Downloads
             | Platform | File | Notes |
             |----------|------|-------|
-            | **Windows** | `Jarvis-Windows-x64.zip` | Extract → Run `Jarvis.exe` |
+            | **Windows** | `Toastovac-Windows-x64.zip` | Extract → Run `Toastovac.exe` |
             | **macOS (Apple Silicon)** | `Jarvis-macOS-arm64.zip` | Extract → Move to Applications → Right-click → Open |
             | **macOS (Intel)** | `Jarvis-macOS-x64.zip` | Extract → Move to Applications → Right-click → Open |
             | **Linux** | `Jarvis-Linux-x64.tar.gz` | `tar -xzf` → Run `./Jarvis/Jarvis` |

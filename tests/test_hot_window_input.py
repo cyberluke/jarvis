@@ -67,7 +67,7 @@ def _create_listener(**kwargs):
          patch("jarvis.listening.listener.np", None), \
          patch("jarvis.listening.listener.create_intent_judge", return_value=None):
         from jarvis.listening.listener import VoiceListener
-        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory)
+        listener = VoiceListener(mock_db, mock_cfg, mock_tts, mock_dialogue_memory, MagicMock())
 
     return listener, mock_tts
 

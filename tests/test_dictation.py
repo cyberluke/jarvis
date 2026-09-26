@@ -936,7 +936,7 @@ class TestListenerPauseFlag:
         cfg.vad_enabled = False
         cfg.wake_aliases = []
         cfg.stop_commands = ["stop"]
-        return VoiceListener(MagicMock(), cfg, MagicMock(), MagicMock())
+        return VoiceListener(MagicMock(), cfg, MagicMock(), MagicMock(), MagicMock())
 
     def test_voice_listener_has_dictation_active_flag(self, listener):
         """VoiceListener should initialise _dictation_active = False."""

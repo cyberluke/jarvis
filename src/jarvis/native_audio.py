@@ -660,6 +660,37 @@ def pop_asr(max_frames: int = 64):
     return 160, arr
 
 
+def pop_render_ref(max_frames: int = 96):
+    """Drain up to ``max_frames`` 48 kHz frames from the v1 render-reference
+    (loopback) ring — the system audio going to the speakers (Chrome, YouTube,
+    a video call). Returns ``(480, float32 ndarray)`` or ``(480, None)``."""
+    if _D is None:
+        return 480, None
+    lay = shm_layout()
+    if lay is None:
+        return 480, None
+    head = int(lay.render_head)
+    tail = int(lay.render_tail)
+    if head == tail:
+        return 480, None
+    cap = 512
+    n = (head - tail) if head > tail else (cap - tail + head)
+    if n > max_frames:
+        n = max_frames
+    if n <= 0:
+        return 480, None
+    out = [None] * n
+    idx = tail
+    for j in range(n):
+        base = idx * 480
+        out[j] = list(lay.render_ref[base: base + 480])
+        idx = (idx + 1) % cap
+    lay.render_tail = idx
+    import numpy as _np
+    arr = _np.asarray(out, dtype=_np.float32).reshape(-1)
+    return 480, arr
+
+
 def status_summary() -> dict:
     caps = capabilities()
     stat = last_status()

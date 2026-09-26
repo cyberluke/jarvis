@@ -22,6 +22,7 @@ from .builtin.time_tool import TimeTool
 from .builtin.stop import StopTool
 from .builtin.tool_search import ToolSearchTool
 from .builtin.windows_actions import WindowsActionsTool
+from .builtin.desktop import DesktopTool
 from .types import ToolExecutionResult
 from ..config import Settings
 from .external.mcp_client import MCPClient
@@ -41,6 +42,7 @@ BUILTIN_TOOLS = {
     "getWeather": WeatherTool(),
     "getTime": TimeTool(),
     "windowsActions": WindowsActionsTool(),
+    "desktopTool": DesktopTool(),
     "stop": StopTool(),
     "toolSearchTool": ToolSearchTool(),
 }

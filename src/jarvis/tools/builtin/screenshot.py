@@ -32,38 +32,77 @@ class ScreenshotTool(Tool):
         """Execute the screenshot tool."""
         context.user_print("📸 Capturing a screenshot for OCR…")
         debug_log("screenshot: capturing OCR...", "screenshot")
-        # Inline OCR capture logic (previously in separate helper)
+        
         ocr_text: str = ""
-        sc = shutil.which("screencapture")
-        if sc:
-            tmpdir = tempfile.mkdtemp(prefix="jarvis_ocr_")
-            png_path = os.path.join(tmpdir, "shot.png")
-            try:
-                cmd = [sc, "-i", png_path]
-                try:
-                    ret = subprocess.run(cmd)
-                except Exception:
-                    ret = None  # type: ignore
-                if ret and getattr(ret, "returncode", 1) == 0 and os.path.exists(png_path):
+        image_captured = False
+        
+        try:
+            if os.name == 'nt':
+                # Windows implementation using Pillow
+                from PIL import ImageGrab, Image
+                import pytesseract
+                
+                img = ImageGrab.grab()
+                if img:
+                    image_captured = True
                     tess = shutil.which("tesseract")
                     if tess:
-                        try:
-                            import pytesseract  # type: ignore
-                            from PIL import Image  # type: ignore
-                            with Image.open(png_path) as im:
-                                text = pytesseract.image_to_string(im)
-                                if text and text.strip():
-                                    ocr_text = text.strip()
-                        except Exception:
-                            pass
-            finally:
-                try:
-                    if os.path.exists(png_path):
-                        os.remove(png_path)
-                    os.rmdir(tmpdir)
-                except Exception:
+                        text = pytesseract.image_to_string(img)
+                        if text and text.strip():
+                            ocr_text = text.strip()
+                        else:
+                            ocr_text = "Capture succeeded but no text was extracted via OCR."
+                    else:
+                        ocr_text = "Capture succeeded but Tesseract was not found."
+                else:
                     pass
-        debug_log(f"screenshot: ocr_chars={len(ocr_text)}", "screenshot")
-        context.user_print("✅ Screenshot processed.")
-        # Return raw OCR text as tool result (no LLM processing here)
-        return ToolExecutionResult(success=True, reply_text=ocr_text)
+            else:
+                # macOS/Linux implementation using screencapture
+                sc = shutil.which("screencapture")
+                if sc:
+                    tmpdir = tempfile.mkdtemp(prefix="jarvis_ocr_")
+                    png_path = os.path.join(tmpdir, "shot.png")
+                    try:
+                        cmd = [sc, "-i", png_path]
+                        ret = subprocess.run(cmd, capture_output=True)
+                        if ret and ret.returncode == 0 and os.path.exists(png_path):
+                            image_captured = True
+                            tess = shutil.which("tesseract")
+                            if tess:
+                                import pytesseract
+                                from PIL import Image
+                                with Image.open(png_path) as im:
+                                    text = pytesseract.image_to_string(im)
+                                    if text and text.strip():
+                                        ocr_text = text.strip()
+                                    else:
+                                        ocr_text = "Capture succeeded but no text was extracted via OCR."
+                            else:
+                                ocr_text = "Capture succeeded but Tesseract was not found."
+                    finally:
+                        if os.path.exists(png_path):
+                            os.remove(png_path)
+                        if os.path.exists(tmpdir):
+                            os.rmdir(tmpdir)
+                else:
+                    return ToolExecutionResult(
+                        success=False,
+                        reply_text=None,
+                        error_message="No compatible screenshot tool found (screencapture)."
+                    )
+
+            if not image_captured:
+                debug_log("screenshot: capture failed", "screenshot")
+                return ToolExecutionResult(
+                    success=False,
+                    reply_text=None,
+                    error_message="Capture failed or was cancelled."
+                )
+
+            debug_log(f"screenshot: ocr_chars={len(ocr_text)}", "screenshot")
+            context.user_print("✅ Screenshot processed.")
+            return ToolExecutionResult(success=True, reply_text=ocr_text)
+
+        except Exception as e:
+            debug_log(f"screenshot: unexpected error: {e}", "screenshot")
+            return ToolExecutionResult(success=False, reply_text=None, error_message=str(e))

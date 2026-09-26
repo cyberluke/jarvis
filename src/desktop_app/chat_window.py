@@ -80,6 +80,20 @@ class ChatIpcSignals(QObject):
     line_received = pyqtSignal(str)
 
 
+class PresenceIpcSignals(QObject):
+    """Marshals a raw ``__PRESENCE__:`` log line from the log-reader worker thread
+    onto the Qt main thread.
+    """
+
+    line_received = pyqtSignal(str)
+
+
+class PresenceSignals(QObject):
+    """Marshals presence events onto the Qt main thread for UI consumption."""
+
+    changed = pyqtSignal(str, str)  # mode, label
+
+
 # ---------------------------------------------------------------------------
 # Window
 # ---------------------------------------------------------------------------

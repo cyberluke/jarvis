@@ -40,3 +40,6 @@ infra/openvino-npu/models/Qwen3-Reranker-0.6B-int8-ov/1/openvino_model.bin
 # Voice PE smoke two-channel WAV dumps (regenerated on every run)
 pe_diag-channel-*.wav
 probe-channel-*.wav
+
+# OneOCR maintainer staging area (transient; recreated per preparation run)
+tools/oneocr/.work/
