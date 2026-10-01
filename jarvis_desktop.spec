@@ -221,6 +221,10 @@ hiddenimports = [
     'jarvis.listening',
     'jarvis.listening.echo_detection',
     'jarvis.listening.listener',
+    # Isolated faster-whisper STT worker: the daemon re-execs this bundle
+    # with JARVIS_STT_WORKER=1; the module must survive PyInstaller analysis
+    # even though it is imported lazily by the listener.
+    'jarvis.listening.fasterwhisper_worker',
     # OpenVINO speech backend: shared catalog + runtime discovery + adapter +
     # isolated worker entry. The worker imports the native OpenVINO/GenAI
     # libraries; the desktop interpreter keeps only these pure-Python modules.

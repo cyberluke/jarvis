@@ -1,0 +1,32 @@
+{
+  "run": "2026-09-29",
+  "captureBackend": "dxgi_desktop_duplication",
+  "library": "dxcam 0.3.0 (DXGI Output Duplication, GPU-native)",
+  "sourceResolution": "3840x2160 (true, verified via dxcam + gdigrab probe)",
+  "sourceSdr": true,
+  "sdrTaggedAs": "bt709 (never PQ)",
+  "encoder": "hevc_qsv main10 3840x2160",
+  "transport": "TZHL :8768 -> c2.amlogic.hevc.decoder createCount=1",
+  "targetFps": 30,
+  "measured": {
+    "captureFps": 30.02,
+    "encoderFps": 30.0,
+    "captureLatencyMs": 10.69,
+    "droppedFrames": 0,
+    "queueDepth": 0,
+    "framesWritten": 1650
+  },
+  "box": {
+    "appFocused": "ai.toastovac.tv/.LiveHdrActivity",
+    "surface": "SurfaceView BLAST Consumer 4096x2304",
+    "decoderCreateCount": 1,
+    "clients": 1
+  },
+  "pass": {
+    "gpuNativeCapture": true,
+    "trueResolution": true,
+    "sdrHonest": true,
+    "sharedPipeline": true,
+    "thirtyFpsStable": true
+  }
+}

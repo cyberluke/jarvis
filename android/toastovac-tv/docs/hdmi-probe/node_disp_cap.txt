@@ -1,0 +1,26 @@
+=== disp_cap ===
+2160p60hz
+1080p60hz
+1080p50hz
+720p60hz
+720p50hz
+1080i60hz
+1080i50hz
+1080p24hz
+1080p25hz
+1080p30hz
+2160p24hz
+2160p25hz
+2160p30hz
+2160p50hz
+smpte50hz
+smpte60hz
+smpte24hz
+smpte30hz
+480i60hz
+576i50hz
+480p60hz
+576p50hz
+1440x900p60hzV
+1600x900p60hzV
+1680x1050p60hzV

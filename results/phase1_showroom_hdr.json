@@ -1,0 +1,66 @@
+{
+  "status": "PASS",
+  "phase": "PHASE 1 SDR->HDR SHOWROOM ENGINE",
+  "verdict": "candidates + TV validation complete; WINNER PENDING USER TV VERDICT (P25)",
+  "stack": {
+    "ffmpeg": "9.0.2-full_build-www.gyan.dev",
+    "libplacebo": "v7.371.0 (Intel Xe Vulkan 0x8086:0x7d67, forced)",
+    "onnx": "hdrtvnetpp_agcm_stable.onnx via QSVEncC 8.31 --vpp-onnx (OpenVINO)",
+    "devices": ["Intel Xe iGPU", "Intel NPU [AI Boost]", "Intel CPU"],
+    "encode": "QSV/oneVPL HEVC Main10 BT.2020/PQ + HDR10 SEI (max-cll 1000,400)",
+    "nvidiaUsed": false
+  },
+  "candidates": {
+    "WRAP_ONLY": {"recipe": "BT.709->PQ retag, no enhancement (P11 negative control)", "P50": 20.5, "P90": 79.5, "P99": 99.5, "max": 180.0, "gt1000Pct": 0.0, "p99CV": 5.04},
+    "LP_A": {"family": "libplacebo", "recipe": "peak1000 + gamut expansion", "P50": 203.5, "P90": 780.5, "P99": 983.5, "max": 1558.0, "gt1000Pct": 0.356, "skinHueDeg": 4.25, "p99CV": 4.76},
+    "LP_B": {"family": "libplacebo", "recipe": "peak1200 + sat1.06 + contrast1.03", "P50": 264.5, "P90": 1004.5, "P99": 1277.5, "max": 2003.0, "gt1000Pct": 10.282, "skinHueDeg": 4.25, "p99CV": 5.09},
+    "LP_C": {"family": "libplacebo", "recipe": "peak1500 + sat1.1 + gamma0.97", "P50": 294.5, "P90": 1162.5, "P99": 1478.5, "max": 2369.0, "gt1000Pct": 15.926, "skinHueDeg": 4.40, "p99CV": 4.95},
+    "ONNX_XE": {"family": "HDRTVNet++", "device": "GPU", "fps": 2.2, "P50": 71.5, "P90": 360.5, "P99": 962.5, "max": 4324.0, "gt1000Pct": 0.768, "skinHueDeg": 5.04, "p99CV": 34.56},
+    "ONNX_NPU": {"family": "HDRTVNet++", "device": "NPU", "fps": 5.07, "P50": 69.5, "P90": 345.5, "P99": 943.5, "max": 1448.0, "gt1000Pct": 0.523, "skinHueDeg": 1.58, "p99CV": 34.56},
+    "ONNX_CPU": {"family": "HDRTVNet++", "device": "CPU", "fps": 3.24, "P50": 69.5, "P90": 345.5, "P99": 943.5, "max": 1463.0, "gt1000Pct": 0.521, "skinHueDeg": 1.48, "p99CV": null},
+    "HYBRID_SHOWROOM": {"family": "hybrid", "recipe": "ONNX_NPU + libplacebo contrast1.05/sat1.08", "P50": 88.5, "P90": 465.5, "P99": 1332.5, "max": 2067.0, "gt1000Pct": 2.524, "skinHueDeg": 2.36, "p99CV": 35.98},
+    "HYBRID_SHOWROOM_B": {"family": "hybrid", "recipe": "ONNX_NPU + libplacebo contrast1.1/sat1.12", "P50": 111.5, "P90": 626.5, "P99": 1862.5, "max": 3249.0, "gt1000Pct": 3.832, "skinHueDeg": 2.18, "p99CV": 37.39}
+  },
+  "tvComparison": {
+    "file": "showroom/showroom_phase1_compare.mp4 (enhanced/showroom_compare.mp4)",
+    "layout": "4 x 5s sequential full-screen: WRAP ONLY | LIBPLACEBO SHOWROOM | HDRTVNET NPU | HYBRID SHOWROOM",
+    "resolution": "3840x2160 HEVC Main10 10-bit BT.2020/PQ, 60fps, HDR10 SEI",
+    "instantSwitch": "enhanced/showroom_{a,b,c}.mp4 = LP_B | ONNX_NPU | HYBRID_B via cast.showroom",
+    "verified": {
+      "hdrType": "HDR10-GAMMA_ST2084",
+      "clients": 1,
+      "avgMbps": 7.95,
+      "drops": 0,
+      "errors": 0,
+      "idr": 46,
+      "cfg": 47
+    }
+  },
+  "winner": {
+    "selected": "PENDING USER",
+    "libplaceboBest": "LP_B",
+    "onnxBest": "ONNX_NPU",
+    "hybrid": "HYBRID_SHOWROOM_B",
+    "note": "user picks on TV; then SHOWROOM_HDR_V1 -> full-clip enhanced/cin_showroom_hdr.mp4 -> optional cleanup/CAS/color ladder"
+  },
+  "definitionOfDone": {
+    "ffmpeg71Preserved": true,
+    "newestFfmpegChecked": true,
+    "newestFullBinaryTriedFirst": true,
+    "libplaceboInverseTonemappingVerified": true,
+    "intelVulkanAdapterProven": true,
+    "customBuild": "not needed",
+    "customBuildOptimized": null,
+    "vulkanLibplaceboGpuPath": true,
+    "noNvidiaExecution": true,
+    "wrapOnlyControl": "showroom/A_wrap_only_hdr.mp4",
+    "libplaceboCandidates": ["LP_A", "LP_B", "LP_C"],
+    "hdrtvnetppRealInference": ["ONNX_XE", "ONNX_NPU", "ONNX_CPU"],
+    "hybridCandidate": "HYBRID_SHOWROOM_B",
+    "realPqLuminanceMeasured": true,
+    "temporalStabilityChecked": true,
+    "fullScreenTvComparison": true,
+    "winnerImmediatelyVisible": "pending TV verdict",
+    "onlyWinnerProcessedFullLength": "pending winner"
+  }
+}

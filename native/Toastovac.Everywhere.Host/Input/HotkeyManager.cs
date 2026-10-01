@@ -17,7 +17,10 @@ public sealed class HotkeyManager : IDisposable
 
     private readonly Dictionary<string, (uint mods, uint vk)> _chords = new();
     private readonly Dictionary<string, ushort> _registered = new();
+    private readonly Dictionary<string, int> _hookIds = new();
+    private readonly Dictionary<string, long> _hookFiredAt = new();
     private IntPtr _hook = IntPtr.Zero;
+    private IntPtr _hotkeyHwnd = IntPtr.Zero;
     private LowLevelKeyboardProc? _proc;
     private Action<string>? _onSlot;
 
@@ -28,26 +31,64 @@ public sealed class HotkeyManager : IDisposable
     private delegate IntPtr LowLevelKeyboardProc(
         int nCode, IntPtr wParam, IntPtr lParam);
 
-    /// <summary>Parse the table and install the low-level hook. ``onSlot``
-    /// receives the slot name when its chord fires.</summary>
+    /// <summary>Parse the table, install the low-level hook and register the
+    /// same chords system-wide as a backup. ``onSlot`` receives the slot name
+    /// when its chord fires.</summary>
     public void Register(Window window,
         IReadOnlyDictionary<string, string> table, Action<string>? onSlot = null)
     {
         _onSlot = onSlot;
+        _hotkeyHwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         foreach (var (slot, chord) in table)
         {
             if (TryParseChord(chord, out var mods, out var vk))
             {
                 _chords[slot] = (mods, vk);
                 _registered[slot] = (ushort)vk;
+                // System-level backup: the low-level hook cannot see keyboard
+                // input destined for higher-integrity (elevated) windows
+                // (UIPI), so RegisterHotKey keeps the chord alive there. The
+                // hook swallows chords before the system hotkey table is
+                // consulted, so a normal press fires exactly one path.
+                // Chords without modifiers (Esc) are never registered
+                // system-wide: stealing a bare key globally would break
+                // ordinary typing.
+                if (mods != 0)
+                {
+                    int id = 0x1000 + _hookIds.Count;
+                    if (RegisterHotKey(_hotkeyHwnd, id, mods, vk))
+                    {
+                        _hookIds[slot] = id;
+                    }
+                }
             }
         }
         InstallHook();
     }
 
-    // Compatibility shim for the older SlotFor(id) lookup used by the WM_HOTKEY
-    // path; with the low-level hook the slot is dispatched directly.
-    public string? SlotFor(ushort id) => null;
+    /// <summary>Slot for a WM_HOTKEY id, or null when unknown or when the
+    /// same chord was just handled through the low-level hook (dedupe).</summary>
+    public string? SlotFor(ushort id)
+    {
+        foreach (var (slot, hid) in _hookIds)
+        {
+            if (hid == id)
+            {
+                if (Environment.TickCount64
+                    - _hookFiredAt.GetValueOrDefault(slot) < 400)
+                {
+                    return null;  // already dispatched via the hook
+                }
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Record a hook-side chord dispatch so the mirrored WM_HOTKEY
+    /// (if the system delivers it anyway) is deduped.</summary>
+    private void NoteHookFired(string slot)
+        => _hookFiredAt[slot] = Environment.TickCount64;
 
     private void InstallHook()
     {
@@ -86,6 +127,13 @@ public sealed class HotkeyManager : IDisposable
         if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
         {
             var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+            // Never react to input this process injected itself (the
+            // clipboard-fallback Ctrl+C, paste, etc.): a hook that swallows
+            // its own injected keys would silently eat the copy.
+            if ((info.flags & LLKHF_INJECTED) != 0)
+            {
+                return CallNextHookEx(_hook, nCode, wParam, lParam);
+            }
             uint mods = CurrentModifiers();
 
             // Modal-overlay escape (OCR selector): Esc closes it.
@@ -143,6 +191,7 @@ public sealed class HotkeyManager : IDisposable
                 {
                     try
                     {
+                        NoteHookFired(slot);
                         _onSlot?.Invoke(slot);
                     }
                     catch (Exception)
@@ -209,9 +258,18 @@ public sealed class HotkeyManager : IDisposable
             UnhookWindowsHookEx(_hook);
             _hook = IntPtr.Zero;
         }
+        foreach (var (_, id) in _hookIds)
+        {
+            if (_hotkeyHwnd != IntPtr.Zero)
+            {
+                UnregisterHotKey(_hotkeyHwnd, id);
+            }
+        }
+        _hookIds.Clear();
     }
 
     private const int WH_KEYBOARD_LL = 13;
+    private const uint LLKHF_INJECTED = 0x00000010;
     private const int VK_CONTROL = 0x11;
     private const int VK_SHIFT = 0x10;
     private const int VK_MENU = 0x12;
@@ -236,6 +294,13 @@ public sealed class HotkeyManager : IDisposable
     [DllImport("user32.dll")]
     private static extern IntPtr CallNextHookEx(
         IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id,
+        uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);

@@ -1,0 +1,19 @@
+{
+  "run": "2026-09-29",
+  "model": "large-v3-turbo",
+  "device": "auto",
+  "compute": "int8",
+  "modelLoadCount": 1,
+  "modelLoadDurationSec": 4.2,
+  "jobCount": 3,
+  "inferenceCount": 3,
+  "jobs": [
+    {"job": 1, "wallSec": 8.182, "rtf": 0.078, "segments": 27},
+    {"job": 2, "wallSec": 5.86, "rtf": 0.056, "segments": 32},
+    {"job": 3, "wallSec": 5.703, "rtf": 0.054, "segments": 25}
+  ],
+  "processRamMB": {"beforeLoad": 26.8, "afterJobs": 798.2},
+  "audioSource": "s8B3_Nq2Cgk source.mp4 (105 s)",
+  "pass": {"modelLoadCountEquals1": true, "jobCountAtLeast3": true},
+  "rtxUsed": false
+}

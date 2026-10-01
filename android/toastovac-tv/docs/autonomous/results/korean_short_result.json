@@ -1,0 +1,48 @@
+{
+  "scenario": "korean_short_czech_subtitles",
+  "status": "pass",
+  "duration_sec": 35.3,
+  "source": {
+    "url": "https://www.youtube.com/watch?v=x6uD7GeAj84",
+    "video_id": "x6uD7GeAj84",
+    "title": "[Vlog] Korean Listening Practice | Working on my assignment for 2 hours | 2시간 동안 과제를 해요. | 한국어 브이로그",
+    "uploader": "Korean with Joy 조이랑 한국어",
+    "duration": 35,
+    "resolution": "3840x2160",
+    "vcodec": "vp9",
+    "acodec": "opus",
+    "language": "ko"
+  },
+  "checks": {
+    "download": true,
+    "audio": true,
+    "whisper": true,
+    "korean_transcript": true,
+    "czech_translation": true,
+    "subtitle_timings": true,
+    "playback_via_cast_host": true,
+    "hwcvideo_unblank": true
+  },
+  "metrics": {
+    "whisper_model": "large-v3-turbo",
+    "whisper_device": "auto/int8 (faster-whisper, local D:\\_MODELS cache)",
+    "whisper_load_sec": 306.0,
+    "whisper_wall_sec": 1.98,
+    "whisper_rtf": 0.056,
+    "translate_wall_sec": 60.0,
+    "cast_bitrate_mbps": 11.0
+  },
+  "issues": [
+    "Subtitles burned into the HEVC composite (single-decoder constraint; no second overlay plane).",
+    "SDR source mapped into 4K HEVC Main10 canvas tagged bt709 (honest SDR, not faked PQ).",
+    "Original Korean audio not in the live HEVC path (video-only composite); source.mp4 retains Korean audio.",
+    "TV-side subtitle sync inferred from burned SRT timings + looping ffmpeg -re, not measured A/V offset."
+  ],
+  "artifacts": {
+    "source": "C:/Users/lukes.COREI9/AppData/Local/VIVERRA/Toastovac/videos/x6uD7GeAj84/source.mp4",
+    "ko_transcript": "C:/Users/lukes.COREI9/AppData/Local/VIVERRA/Toastovac/videos/x6uD7GeAj84/ko_transcript.json",
+    "ko_srt": "C:/Users/lukes.COREI9/AppData/Local/VIVERRA/Toastovac/videos/x6uD7GeAj84/ko_original.srt",
+    "cs_srt": "C:/Users/lukes.COREI9/AppData/Local/VIVERRA/Toastovac/videos/x6uD7GeAj84/cs_subtitles.srt",
+    "cs_json": "C:/Users/lukes.COREI9/AppData/Local/VIVERRA/Toastovac/videos/x6uD7GeAj84/cs_transcript.json"
+  }
+}

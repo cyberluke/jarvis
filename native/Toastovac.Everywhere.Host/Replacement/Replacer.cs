@@ -158,6 +158,9 @@ public static class Replacer
     private const uint KEYEVENTF_UNICODE = 0x0004;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
+    // The INPUT union MUST declare all three members: on x64 the union is
+    // sized by MOUSEINPUT (32 bytes), so a one-member union produces the
+    // wrong struct size and SendInput fails with ERROR_INVALID_PARAMETER.
     [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
     {
@@ -168,7 +171,9 @@ public static class Replacer
     [StructLayout(LayoutKind.Explicit)]
     private struct InputUnion
     {
+        [FieldOffset(0)] public MOUSEINPUT mi;
         [FieldOffset(0)] public KEYBDINPUT ki;
+        [FieldOffset(0)] public HARDWAREINPUT hi;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -179,6 +184,25 @@ public static class Replacer
         public uint dwFlags;
         public uint time;
         public nint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx;
+        public int dy;
+        public uint mouseData;
+        public uint dwFlags;
+        public uint time;
+        public nint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HARDWAREINPUT
+    {
+        public uint uMsg;
+        public ushort wParamL;
+        public ushort wParamH;
     }
 
     [DllImport("user32.dll")]

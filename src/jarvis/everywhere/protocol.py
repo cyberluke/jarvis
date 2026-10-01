@@ -26,13 +26,20 @@ MAX_FIELDS = 48
 
 #: Message kinds accepted from the native host (inbound).
 INBOUND_KINDS = ("snapshot", "action", "apply", "cancel", "ping", "subtitles",
-                 "coach", "ocr")
+                 "coach", "ocr",
+                 # Async task plane (§Task queue): the host subscribes once for
+                 # a persistent push channel, then actions return immediately
+                 # with a ``task_id`` and progress arrives as ``task_event``.
+                 "subscribe", "task_cancel", "task_result", "task_list")
 #: Message kinds emitted by the broker (outbound).
 OUTBOUND_KINDS = ("action_result", "apply_result", "pong", "error",
                   "subtitles_options", "subtitles_started",
                   "subtitles_stopped", "subtitles_poll",
                   "coach_started", "coach_stopped", "coach_poll",
-                  "coach_summary", "ocr_result", "ocr_page")
+                  "coach_summary", "ocr_result", "ocr_page",
+                  # Async task plane.
+                  "subscribed", "task_queued", "task_event", "task_result",
+                  "task_list", "task_cancel")
 
 #: Typed failure codes (§Failure codes). One code per failure, never a
 #: generic "something went wrong".
@@ -158,6 +165,12 @@ def validate_inbound(obj: Dict[str, Any]) -> Tuple[bool, str]:
             return False, "bad:snapshot_id"
         if not isinstance(obj.get("request_id"), str):
             return False, "bad:request_id"
+    elif kind == "task_cancel":
+        if not isinstance(obj.get("task_id"), str) or not obj["task_id"]:
+            return False, "bad:task_id"
+    elif kind == "task_result":
+        if not isinstance(obj.get("task_id"), str) or not obj["task_id"]:
+            return False, "bad:task_id"
     return True, ""
 
 

@@ -196,13 +196,14 @@
   ],
   "voice_pe_devices": {},
   "voice_pe_button_actions": {
-    "double_press": "toggle_overlay",
+    "double_press": "commit_utterance",
     "triple_press": "open_command_palette",
     "long_press": "cancel_current_agent_run",
     "easter_egg_press": "toaster_easter_egg"
   },
   "voice_pe_hardware_timeout_s": 180.0,
   "voice_pe_llm_min_tokens_per_s": 5.0,
+  "voice_pe_no_audio_warn_s": 6.0,
   "virtual_microphone_enabled": false,
   "virtual_microphone_source": "",
   "virtual_microphone_name": "Toustova\u010d Clean Microphone",

@@ -100,6 +100,20 @@ class InterviewCoach:
             if not native_audio.load():
                 debug_log("coach: native audio engine not loaded", "everywhere")
                 return False
+            # Meet/Teams do not use the Windows default speaker. Pin both
+            # the candidate mic and the remote-party loopback to the
+            # Plantronics USB headset (or interview_headset_match).
+            try:
+                from ..listening import audio_io as _aio
+                pair = _aio.ensure_interview_headset(self._cfg)
+                debug_log(
+                    f"coach: headset mic='{pair.get('capture_name')}' "
+                    f"ear='{pair.get('render_name')}'",
+                    "everywhere",
+                )
+            except Exception as exc:
+                debug_log(f"coach: interview headset required: {exc}", "everywhere")
+                return False
             self._running = True
             self._context = []
             self._thread = threading.Thread(
@@ -129,22 +143,35 @@ class InterviewCoach:
 
     # ── capture loop ──────────────────────────────────────────────────
     def _loop(self) -> None:
-        """Drain both rings: mic (me) at 16 kHz and loopback (others) at 48 kHz."""
+        """Mic from the v2 local lane; others from WASAPI loopback of the headset ear."""
         from .. import native_audio
+        from ..listening import audio_io as _aio
         import numpy as np
 
         mic_voiced: list = []
         mic_silence = 0
         lb_voiced: list = []
         lb_silence = 0
+        loopback = _HeadsetLoopback(self._cfg)
+        try:
+            loopback.start()
+        except Exception as exc:
+            debug_log(f"coach: headset loopback required: {exc}", "everywhere")
+            with self._lock:
+                self._running = False
+            self._emit({"type": "coach_error",
+                        "error": f"interview headset loopback failed: {exc}"})
+            return
 
         while True:
             with self._lock:
                 if not self._running:
                     break
-            # Mic (me): 16 kHz frames of 160 samples.
+            # Mic (me): cleaned 16 kHz from the Plantronics capture lane.
             try:
-                _r, mic = native_audio.pop_asr(48)
+                _r, mic = _aio.pop_local_clean(48)
+                if mic is None:
+                    _r, mic = native_audio.pop_asr(48)
             except Exception:
                 mic = None
             if mic is not None and len(mic) > 0:
@@ -160,9 +187,9 @@ class InterviewCoach:
                                        or len(mic_voiced) >= _MAX_UTTERANCE):
                         self._on_utterance("me", np.concatenate(mic_voiced), 16000)
                         mic_voiced = []; mic_silence = 0
-            # Loopback (others): 48 kHz frames of 480 samples.
+            # Loopback (others): WASAPI loopback of the same headset earphone.
             try:
-                _r, lb = native_audio.pop_render_ref(96)
+                _r, lb = loopback.pop(96)
             except Exception:
                 lb = None
             if lb is not None and len(lb) > 0:
@@ -180,6 +207,11 @@ class InterviewCoach:
                         lb_voiced = []; lb_silence = 0
             if (mic is None or len(mic) == 0) and (lb is None or len(lb) == 0):
                 time.sleep(0.01)
+        if loopback is not None:
+            try:
+                loopback.stop()
+            except Exception:
+                pass
 
     # ── per-utterance pipeline ────────────────────────────────────────
     def _on_utterance(self, speaker: str, pcm, rate: int) -> None:
@@ -303,6 +335,108 @@ class InterviewCoach:
         except Exception as exc:
             debug_log(f"coach: diary push failed: {exc}", "everywhere")
         return summary
+
+
+class _HeadsetLoopback:
+    """WASAPI loopback of the interview headset earphone (Meet/Teams path).
+
+    PortAudio WASAPI loopback captures whatever that endpoint is playing,
+    which is the remote interviewer when Meet/Teams are pinned to the
+    Plantronics headset — not the Windows default speaker.
+    """
+
+    def __init__(self, cfg: Any) -> None:
+        self._cfg = cfg
+        self._q: list = []
+        self._lock = threading.Lock()
+        self._stream = None
+        self._device = None
+        self._rate = 48000
+
+    def start(self) -> None:
+        import sounddevice as sd
+        from ..listening.audio_io import resolve_interview_headset
+        pair = resolve_interview_headset(self._cfg)
+        want = str(pair["render_name"] or "").casefold()
+        device = None
+        for i, dev in enumerate(sd.query_devices()):
+            name = str(dev.get("name") or "").casefold()
+            # Loopback is opened against the WASAPI *output* endpoint.
+            if want and want[:24] in name and int(dev.get("max_output_channels") or 0) > 0:
+                host = ""
+                try:
+                    host = str(sd.query_hostapis()[int(dev.get("hostapi") or 0)].get("name") or "")
+                except Exception:
+                    pass
+                if "wasapi" in host.casefold():
+                    device = i
+                    break
+        extra = None
+        try:
+            extra = sd.WasapiSettings(loopback=True)
+        except Exception as exc:
+            raise RuntimeError(f"WASAPI loopback unavailable: {exc}") from exc
+        if device is None:
+            raise RuntimeError(
+                f"no WASAPI output view of headset ear '{pair['render_name']}'"
+            )
+        self._device = device
+        info = sd.query_devices(device)
+        ch = min(2, max(1, int(info.get("max_output_channels") or 2)))
+        rate = int(info.get("default_samplerate") or 48000)
+        self._rate = rate
+
+        def _cb(indata, frames, time_info, status):  # noqa: ARG001
+            import numpy as np
+            if indata is None or len(indata) == 0:
+                return
+            mono = np.mean(indata, axis=1).astype(np.float32) if indata.ndim > 1 else indata.reshape(-1)
+            with self._lock:
+                self._q.append(mono.copy())
+                if len(self._q) > 200:
+                    self._q = self._q[-80:]
+
+        self._stream = sd.InputStream(
+            device=device,
+            channels=ch,
+            samplerate=rate,
+            dtype="float32",
+            blocksize=0,
+            extra_settings=extra,
+            callback=_cb,
+        )
+        self._stream.start()
+        debug_log(
+            f"coach: WASAPI loopback device={device} '{pair['render_name']}'",
+            "everywhere",
+        )
+
+    def pop(self, max_frames: int = 96):
+        import numpy as np
+        with self._lock:
+            if not self._q:
+                return 48000, None
+            take = self._q[:max_frames]
+            del self._q[:len(take)]
+        pcm = np.concatenate(take)
+        src = int(self._rate or 48000)
+        if src != 48000 and pcm.size > 1:
+            n_out = max(1, int(round(pcm.size * 48000 / src)))
+            pcm = np.interp(
+                np.linspace(0.0, 1.0, n_out),
+                np.linspace(0.0, 1.0, pcm.size),
+                pcm,
+            ).astype(np.float32)
+        return 48000, pcm
+
+    def stop(self) -> None:
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
 
 
 # ── module-level singleton ────────────────────────────────────────────

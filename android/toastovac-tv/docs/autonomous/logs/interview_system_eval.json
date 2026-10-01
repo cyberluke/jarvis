@@ -1,0 +1,8 @@
+{
+  "what_worked": "Timed turn machine, Whisper-final injection, short TV notes.",
+  "too_verbose": [],
+  "pacing": "6s think + 8s speak + 4s eval per turn",
+  "tv_readability": "notes <= 25 words",
+  "duplicate_events": 0,
+  "duration_sec": 60.001009100000374
+}

@@ -1,0 +1,2 @@
+=== modes ===
+cat: /sys/class/drm/card0-HDMI-A-1/modes: Permission denied

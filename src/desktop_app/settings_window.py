@@ -18,8 +18,10 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QComboBox, QScrollArea, QGroupBox, QFormLayout, QPushButton,
     QMessageBox, QSizePolicy, QListWidget, QListWidgetItem,
-    QStackedWidget, QSplitter, QInputDialog, QFrame,
+    QStackedWidget, QSplitter, QInputDialog, QFrame, QSlider,
+    QColorDialog,
 )
+from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont
 
@@ -51,6 +53,21 @@ class FieldMeta:
     step: Optional[float] = None
     suffix: Optional[str] = None
     nullable: bool = False  # Whether None/"" is a valid value (shows "Default" option)
+    i18n_key: Optional[str] = None  # i18n.py key: "{key}.label" / "{key}.desc"
+
+    def localized_label(self) -> str:
+        if not self.i18n_key:
+            return self.label
+        from jarvis.i18n import tr
+
+        return tr(f"settings.{self.i18n_key}.label")
+
+    def localized_description(self) -> str:
+        if not self.i18n_key:
+            return self.description
+        from jarvis.i18n import tr
+
+        return tr(f"settings.{self.i18n_key}.desc")
 
 
 # Categories and their display order
@@ -66,6 +83,7 @@ CATEGORIES = [
     ("vad", "📊 Voice Activity Detection"),
     ("timing", "⏱️ Timing & Windows"),
     ("voice_pe", "🎙️ Voice PE"),
+    ("voice_pe_bridge", "🌐 Voice PE WebAudio Bridge"),
     ("virtual_mic", "🎙️ Windows Virtual Microphone"),
     ("memory", "🧠 Memory & Dialogue"),
     ("location", "📍 Location"),
@@ -75,6 +93,29 @@ CATEGORIES = [
     ("mcps", "🔌 MCP Servers"),
     ("advanced", "🔧 Advanced"),
 ]
+
+
+def _relative_luminance(rgb) -> float:
+    """Relative luminance of a 0..1 float triple (WCAG weights)."""
+    try:
+        r, g, b = (float(x) for x in rgb)
+    except (TypeError, ValueError):
+        return 0.5
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _fmt_int(value) -> str:
+    """Czech-style integer (space thousands separator)."""
+    from jarvis.utils.numbers import format_int
+
+    return format_int(value)
+
+
+def _fmt_ms(value) -> str:
+    """Czech-style milliseconds (``1 500 ms``)."""
+    from jarvis.utils.numbers import format_ms
+
+    return format_ms(value)
 
 
 def _select_choice_index(combo: QComboBox, value: Any) -> int:
@@ -292,6 +333,20 @@ def _build_field_metadata() -> List[FieldMeta]:
       "voice_input", "choice",
       choices=[("console", "console"), ("multimedia", "multimedia"),
                ("communications", "communications")])
+    f("interview_headset_match", "Interview Headset",
+      "USB headset used for Interview Coach. Meet and Teams do not play "
+      "through the Windows default speaker, so both the candidate mic and "
+      "the remote-party loopback pin to this headset. Default: Plantronics.",
+      "voice_input", "interview_headset")
+    f("interview_capture_endpoint_id", "Interview Mic (override)",
+      "Optional explicit microphone MMDevice. Leave empty to use the "
+      "headset family's microphone.",
+      "voice_input", "mmdevice_capture", nullable=True)
+    f("interview_render_endpoint_id", "Interview Ear / loopback (override)",
+      "Optional explicit earphone MMDevice for Meet/Teams loopback. "
+      "Leave empty to use the headset family's earphone. Must not be "
+      "the TV or default speaker.",
+      "voice_input", "mmdevice_render", nullable=True)
     f("voice_capture_channel_mode", "Capture Channel Mode",
       "mono / left / right / channel_index / stereo_average; index selects "
       "the exact ADAT sub-frame (e.g. 31 + 32 pair).",
@@ -479,9 +534,20 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("web_search_enabled", "Web Search",
       "Enable web search tool",
       "features", "bool")
+    f("searxng_enabled", "SearXNG (local instance)",
+      "Use your local SearXNG meta-search as the primary search fallback "
+      "(instead of Brave). SearXNG runs on your own machine, aggregates "
+      "many engines, and needs no API key. Defaults to http://127.0.0.1:8080.",
+      "features", "bool", i18n_key="searxng_enabled")
+    f("searxng_base_url", "SearXNG URL",
+      "Base URL of your local SearXNG instance. The instance must have its "
+      "JSON output format enabled (Settings → Search → Formats → JSON). "
+      "Leave empty for http://127.0.0.1:8080.",
+      "features", "str", nullable=True, i18n_key="searxng_base_url")
     f("brave_search_api_key", "Brave Search API Key",
-      "Optional. When set, Brave is used as the primary fallback if DuckDuckGo "
-      "is blocked. Free tier: 2,000 queries/month at api.search.brave.com.",
+      "Optional. When set AND SearXNG is off or unreachable, Brave is used "
+      "as the search fallback if DuckDuckGo is blocked. Free tier: 2,000 "
+      "queries/month at api.search.brave.com.",
       "features", "str", nullable=True)
     f("wikipedia_fallback_enabled", "Wikipedia Fallback",
       "Use Wikipedia as a last-resort source when other search engines fail. "
@@ -729,12 +795,57 @@ def _build_field_metadata() -> List[FieldMeta]:
       "voice_pe", "int", min_val=20, max_val=5000, step=20, suffix="ms")
     f("voice_pe_led_brightness", "LED Ring Brightness",
       "Brightness of the public led_ring light (the voice animations come from "
-      "the standard assistant events)",
-      "voice_pe", "float", min_val=0.0, max_val=1.0, step=0.01)
+      "the standard assistant events). Applied to paired satellites live.",
+      "voice_pe", "slider", min_val=0.0, max_val=1.0, step=0.01,
+      i18n_key="voice_pe_led_brightness")
     f("voice_pe_led_rgb", "LED Ring Colour",
-      "Accent colour of the led_ring light: '8c00ff' or '0.55,0,1'. The stock "
-      "firmware drives the internal pixel effects itself",
-      "voice_pe", "str", nullable=True)
+      "Accent colour of the led_ring light: pick a colour or enter hex "
+      "('8c00ff') or '0.55,0,1' RGB text. The stock firmware drives the "
+      "internal pixel effects itself. Applied to paired satellites live.",
+      "voice_pe", "color", nullable=True, i18n_key="voice_pe_led_rgb")
+
+    # --- Voice PE WebAudio Bridge (v271-webaudio/1) ---------------------------
+    # The protocol is generic: the V271 PWA composer is the first client, but
+    # any local app / local website / desktop client with the token and an
+    # allowed Origin can consume the satellite stream (loopback only).
+    f("voice_pe_bridge_enabled", "WebAudio Bridge enabled",
+      "Streams the satellite microphone to local apps over "
+      "ws://127.0.0.1:<port>/voice-pe/v1 (protocol v271-webaudio/1). "
+      "Loopback only — nothing on the LAN can reach it. The protocol is "
+      "generic: any local app, local website or desktop client with the token "
+      "and an allowed Origin can consume the stream; the V271 PWA composer is "
+      "simply the first client.",
+      "voice_pe_bridge", "bool", i18n_key="voice_pe_bridge_enabled")
+    f("voice_pe_bridge_token", "Bridge Token",
+      "Bearer token clients must send (Authorization: Bearer <token>). Leave "
+      "empty to use the JARVIS_VOICE_PE_BRIDGE_TOKEN environment variable. "
+      "Regenerating it kicks existing clients out on reconnect.",
+      "voice_pe_bridge", "password", nullable=True,
+      i18n_key="voice_pe_bridge_token")
+    f("voice_pe_bridge_port", "Bridge Port",
+      "Loopback TCP port of the bridge WebSocket (default 27123).",
+      "voice_pe_bridge", "int", min_val=1024, max_val=65535, step=1,
+      i18n_key="voice_pe_bridge_port")
+    f("voice_pe_bridge_allowed_origins", "Allowed Origins",
+      "Web Origins that may connect. https://v271.cz (the V271 composer) is "
+      "the default. Add your own local web app, e.g. http://localhost:5173. "
+      "\"*\" allows any origin — safe only because the server binds loopback, "
+      "so only software on this machine can ever reach it.",
+      "voice_pe_bridge", "list", i18n_key="voice_pe_bridge_allowed_origins")
+    f("voice_pe_bridge_max_clients", "Max Clients",
+      "Concurrent WebSocket clients (default 1 — the composer). Raise it to "
+      "feed several local apps at once.",
+      "voice_pe_bridge", "int", min_val=1, max_val=8, step=1,
+      i18n_key="voice_pe_bridge_max_clients")
+    f("voice_pe_bridge_buffer_frames", "Buffer Frames",
+      "Bounded outbound frame queue per client (default 200 frames ≈ 6.4 s at "
+      "512 samples / 32 ms). Oldest frames drop first.",
+      "voice_pe_bridge", "int", min_val=50, max_val=2000, step=10,
+      i18n_key="voice_pe_bridge_buffer_frames")
+    f("voice_pe_bridge_device", "Satellite",
+      "Which satellite to stream (MAC, node name or host). Empty = the single "
+      "attached satellite.",
+      "voice_pe_bridge", "str", nullable=True, i18n_key="voice_pe_bridge_device")
 
     # --- Windows Virtual Microphone ---
     # The continuous CleanAudioBus output of the single post-AEC3 source,
@@ -1029,6 +1140,10 @@ class SettingsWindow(QDialog):
                 page = self._build_virtual_mic_page(
                     fields_by_cat.get(cat_key, [])
                 )
+            elif cat_key == "voice_pe_bridge":
+                page = self._build_voice_pe_bridge_page(
+                    fields_by_cat.get(cat_key, [])
+                )
             else:
                 cat_fields = fields_by_cat.get(cat_key, [])
                 if not cat_fields:
@@ -1074,7 +1189,12 @@ class SettingsWindow(QDialog):
         layout.addLayout(btn_layout)
 
     def _build_category_tab(self, fields: List[FieldMeta]) -> QWidget:
-        """Build a scrollable form for a category's fields."""
+        """Build a scrollable form for a category's fields.
+
+        Each field renders as a label + control row with the description as
+        a visible helper line underneath the control (not only a tooltip),
+        so dropdowns like Audio Profile explain their options inline.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -1090,11 +1210,23 @@ class SettingsWindow(QDialog):
             self._widgets[fm.key] = widget
 
             # Label with tooltip
-            label = QLabel(fm.label)
-            label.setToolTip(fm.description)
+            label = QLabel(fm.localized_label())
+            label.setToolTip(fm.localized_description())
             label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
             form.addRow(label, widget)
+
+            if fm.description:
+                desc = QLabel(fm.localized_description())
+                desc.setWordWrap(True)
+                desc.setObjectName("field_desc")
+                desc.setStyleSheet(
+                    "color: #71717a; font-size: 11px;"
+                    " padding-left: 2px; padding-bottom: 4px;"
+                )
+                desc.setToolTip(fm.localized_description())
+                # Empty label-cell spacer keeps the label column aligned.
+                form.addRow(QLabel(""), desc)
 
         # Spacer at bottom
         form.addRow(QLabel(""), QLabel(""))
@@ -1105,7 +1237,18 @@ class SettingsWindow(QDialog):
     # -- Windows Virtual Microphone page --------------------------------------
 
     def _build_virtual_mic_page(self, fields: List[FieldMeta]) -> QWidget:
-        """Clean Microphone section: form + read-only state + actions."""
+        """Clean Microphone section: form + read-only state + actions.
+
+        Two concepts are kept visibly separate:
+
+        * Echo / music cancellation — the in-process AEC3 lane that cleans
+          the microphone signal (a Voice PE satellite or the local USB mic)
+          against system audio. This DSP runs on its own and needs NO
+          Windows driver.
+        * The Windows virtual microphone — the kernel driver + broker +
+          publisher that expose the cleaned stream to other Windows apps as
+          the selectable "Toustovač Clean Microphone" capture device.
+        """
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -1115,16 +1258,52 @@ class SettingsWindow(QDialog):
         vbox.setContentsMargins(16, 16, 16, 16)
         vbox.setSpacing(14)
 
+        def _section_header(text: str, colour: str = "#fbbf24") -> QLabel:
+            header = QLabel(text)
+            header.setStyleSheet(
+                f"font-size: 14px; font-weight: bold; color: {colour};"
+                " margin-top: 6px;"
+            )
+            return header
+
+        def _info_label(text: str) -> QLabel:
+            info = QLabel(text)
+            info.setWordWrap(True)
+            info.setStyleSheet(
+                "color: #a1a1aa; font-size: 12px; line-height: 1.45;"
+                " background-color: #12141a; border: 1px solid #27272a;"
+                " border-radius: 8px; padding: 10px 12px;"
+            )
+            return info
+
+        # --- Echo / music cancellation (no driver needed) ---------------------
+        from jarvis.i18n import tr
+
+        vbox.addWidget(_section_header(tr("vm.clean_mic_title")))
+        vbox.addWidget(_info_label(tr("vm.clean_mic_info")))
+
+        # --- Windows virtual microphone (needs the driver) -------------------
+        vbox.addWidget(_section_header(tr("vm.virtual_mic_title"), "#a78bfa"))
+        vbox.addWidget(_info_label(tr("vm.virtual_mic_info")))
+
         form = QFormLayout()
         form.setSpacing(14)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         for fm in fields:
             widget = self._create_widget(fm)
             self._widgets[fm.key] = widget
-            label = QLabel(fm.label)
-            label.setToolTip(fm.description)
+            label = QLabel(fm.localized_label())
+            label.setToolTip(fm.localized_description())
             label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             form.addRow(label, widget)
+            if fm.description:
+                desc = QLabel(fm.localized_description())
+                desc.setWordWrap(True)
+                desc.setStyleSheet(
+                    "color: #71717a; font-size: 11px;"
+                    " padding-left: 2px; padding-bottom: 4px;"
+                )
+                form.addRow(QLabel(""), desc)
         vbox.addLayout(form)
 
         # Read-only publish/lease state (telemetry only, no audio content).
@@ -1167,6 +1346,171 @@ class SettingsWindow(QDialog):
             return
         self._vmic_status_label.setText("\n".join(str(x) for x in lines))
 
+    # -- Voice PE WebAudio bridge page ----------------------------------------
+
+    def _build_voice_pe_bridge_page(self, fields: List[FieldMeta]) -> QWidget:
+        """WebAudio bridge: explanation + configuration + live observation."""
+        from jarvis.i18n import tr
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(16, 16, 16, 16)
+        vbox.setSpacing(14)
+
+        header = QLabel(tr("vpb.title"))
+        header.setStyleSheet("font-size: 14px; font-weight: bold; color: #34d399;")
+        vbox.addWidget(header)
+
+        info = QLabel(tr("vpb.info"))
+        info.setWordWrap(True)
+        info.setStyleSheet(
+            "color: #a1a1aa; font-size: 12px; line-height: 1.45;"
+            " background-color: #12141a; border: 1px solid #27272a;"
+            " border-radius: 8px; padding: 10px 12px;"
+        )
+        vbox.addWidget(info)
+
+        form = QFormLayout()
+        form.setSpacing(14)
+        form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        for fm in fields:
+            widget = self._create_widget(fm)
+            self._widgets[fm.key] = widget
+            label = QLabel(fm.localized_label())
+            label.setToolTip(fm.localized_description())
+            label.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            )
+            form.addRow(label, widget)
+            if fm.description:
+                desc = QLabel(fm.localized_description())
+                desc.setWordWrap(True)
+                desc.setStyleSheet(
+                    "color: #71717a; font-size: 11px;"
+                    " padding-left: 2px; padding-bottom: 4px;"
+                )
+                form.addRow(QLabel(""), desc)
+        vbox.addLayout(form)
+
+        # Live observation card.
+        self._vpb_status_label = QLabel("Bridge: not started")
+        self._vpb_status_label.setObjectName("subtitle")
+        self._vpb_status_label.setWordWrap(True)
+        vbox.addWidget(self._vpb_status_label)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
+        refresh_btn = QPushButton("🔄 Refresh Status")
+        refresh_btn.clicked.connect(self._on_refresh_voice_pe_bridge)
+        actions.addWidget(refresh_btn)
+        copy_btn = QPushButton("📋 Copy Diagnostics")
+        copy_btn.clicked.connect(self._on_copy_voice_pe_bridge_diagnostics)
+        actions.addWidget(copy_btn)
+        actions.addStretch()
+        vbox.addLayout(actions)
+        vbox.addStretch()
+
+        self._on_refresh_voice_pe_bridge()
+        scroll.setWidget(container)
+        return scroll
+
+    def set_voice_pe_bridge_status_text(self, lines) -> None:
+        """Update the read-only bridge observation block."""
+        if getattr(self, "_vpb_status_label", None) is None:
+            return
+        self._vpb_status_label.setText("\n".join(str(x) for x in lines))
+
+    def _voice_pe_bridge_diagnostics_text(self) -> list[str]:
+        """Bridge health/metrics lines (no audio content)."""
+        lines: list[str] = []
+        try:
+            from jarvis.daemon import get_voice_pe_bridge
+
+            bridge = get_voice_pe_bridge()
+            if bridge is None:
+                lines.append("voice_pe_bridge: not running (disabled or no token)")
+                return lines
+            health = bridge.health()
+            metrics = health.get("metrics", {})
+            lines.append(
+                f"voice_pe_bridge: enabled={health.get('enabled')} "
+                f"running={health.get('running')} "
+                f"ws://{health.get('host')}:{health.get('port')}/voice-pe/v1 "
+                f"token={'yes' if health.get('token') else 'no'} "
+                f"origins={health.get('allowed_origins')} "
+                f"attached={health.get('attached')} "
+                f"clients={health.get('clients')}/{health.get('max_clients')}"
+            )
+            lines.append(
+                "voice_pe_bridge_metrics: connections={connections} "
+                "reconnects={reconnects} rejected_auth={rejected_auth} "
+                "rejected_origin={rejected_origin} rejected_busy={rejected_busy} "
+                "client_peaks={client_peaks} tap_frames_in={tap_frames_in} "
+                "tap_dropped={tap_dropped}".format(
+                    connections=metrics.get("connections"),
+                    reconnects=metrics.get("reconnects"),
+                    rejected_auth=metrics.get("rejected_auth"),
+                    rejected_origin=metrics.get("rejected_origin"),
+                    rejected_busy=metrics.get("rejected_busy"),
+                    client_peaks=metrics.get("client_peaks"),
+                    tap_frames_in=metrics.get("tap", {}).get("frames_in", 0),
+                    tap_dropped=metrics.get("tap", {}).get("dropped_frames", 0),
+                )
+            )
+            for session in metrics.get("sessions", []):
+                lines.append(
+                    f"voice_pe_bridge_session: {session}"
+                )
+        except Exception as exc:
+            lines.append(f"voice_pe_bridge: status error: {exc}")
+        return lines
+
+    def _on_refresh_voice_pe_bridge(self) -> None:
+        try:
+            from jarvis.daemon import get_voice_pe_bridge
+
+            bridge = get_voice_pe_bridge()
+            if bridge is None:
+                self.set_voice_pe_bridge_status_text(
+                    ["Bridge: not running — enable it above and restart the "
+                     "app (a token is required)."]
+                )
+                return
+            health = bridge.health()
+            metrics = health.get("metrics", {})
+            self.set_voice_pe_bridge_status_text([
+                f"Bridge: {'🟢 running' if health.get('running') else '🔴 stopped'} "
+                f"on ws://{health.get('host')}:{health.get('port')}/voice-pe/v1",
+                f"Clients: {health.get('clients')}/{health.get('max_clients')}   "
+                f"Tap attached: {'yes' if health.get('attached') else 'no'}   "
+                f"Token: {'set' if health.get('token') else 'missing'}",
+                f"Connections: {metrics.get('connections')}   "
+                f"Rejected auth: {metrics.get('rejected_auth')}   "
+                f"Rejected origin: {metrics.get('rejected_origin')}   "
+                f"Rejected busy: {metrics.get('rejected_busy')}",
+                f"Allowed origins: {', '.join(health.get('allowed_origins') or [])}",
+            ])
+        except Exception as exc:
+            debug_log(f"voice_pe bridge status refresh failed: {exc}", "settings")
+
+    def _on_copy_voice_pe_bridge_diagnostics(self) -> None:
+        from PyQt6.QtWidgets import QApplication
+
+        try:
+            QApplication.clipboard().setText(
+                "\n".join(self._voice_pe_bridge_diagnostics_text())
+            )
+        except Exception as exc:
+            debug_log(
+                f"voice_pe bridge diagnostics copy failed: {exc}", "settings"
+            )
+
     def _virtual_mic_diagnostics_text(self) -> list[str]:
         """Telemetry-only diagnostics lines (no audio content)."""
         lines: list[str] = []
@@ -1182,19 +1526,19 @@ class SettingsWindow(QDialog):
                     "virtual_microphone: state={state} source={source} "
                     "gen={gen} frames={frames} silence={silence} "
                     "sequence={seq} stale={stale} gaps={gaps} "
-                    "p50={p50}ms p95={p95}ms max={max}ms "
+                    "p50={p50} p95={p95} max={max} "
                     "muted={muted} fail_closed={fail_closed}".format(
                         state=st.get("state"),
                         source=st.get("source"),
                         gen=st.get("producer_generation"),
-                        frames=st.get("frames_produced"),
-                        silence=st.get("silence_frames"),
-                        seq=st.get("sequence"),
-                        stale=st.get("stale_packets"),
-                        gaps=st.get("sequence_gaps"),
-                        p50=lat.get("p50"),
-                        p95=lat.get("p95"),
-                        max=lat.get("max"),
+                        frames=_fmt_int(st.get("frames_produced")),
+                        silence=_fmt_int(st.get("silence_frames")),
+                        seq=_fmt_int(st.get("sequence")),
+                        stale=_fmt_int(st.get("stale_packets")),
+                        gaps=_fmt_int(st.get("sequence_gaps")),
+                        p50=_fmt_ms(lat.get("p50")),
+                        p95=_fmt_ms(lat.get("p95")),
+                        max=_fmt_ms(lat.get("max")),
                         muted=st.get("muted"),
                         fail_closed=st.get("fail_closed"),
                     )
@@ -1327,6 +1671,12 @@ class SettingsWindow(QDialog):
             w.setToolTip(fm.description)
             return w
 
+        if fm.field_type == "color":
+            return self._create_color_widget(fm, current)
+
+        if fm.field_type == "slider":
+            return self._create_slider_widget(fm, current)
+
         if fm.field_type == "choice":
             w = QComboBox()
             for val, display in (fm.choices or []):
@@ -1357,9 +1707,42 @@ class SettingsWindow(QDialog):
             w.setToolTip(fm.description)
             return w
 
+        if fm.field_type == "interview_headset":
+            w = QComboBox()
+            w.addItem("🎧 Plantronics (default)", "Plantronics")
+            try:
+                from jarvis import native_audio as _na
+                if not _na.is_loaded():
+                    _na.load()
+                families = _na.list_headset_families() if _na.is_loaded() else []
+                seen = {"plantronics"}
+                for row in families:
+                    fam = str(row.get("family") or "").strip()
+                    if not fam or fam.casefold() in seen:
+                        continue
+                    seen.add(fam.casefold())
+                    label = (
+                        f"🎧 {fam}  ·  {row.get('capture_name', '')}  /  "
+                        f"{row.get('render_name', '')}"
+                    )
+                    w.addItem(label[:140], fam)
+                    w.setItemData(w.count() - 1, fam, Qt.ItemDataRole.ToolTipRole)
+            except Exception as exc:
+                debug_log(f"interview headset enumeration failed: {exc}", "settings")
+            current = "Plantronics" if current in (None, "") else str(current)
+            idx = w.findData(current)
+            if idx < 0:
+                w.addItem(f"🎧 {current}  (not plugged in)", current)
+                idx = w.count() - 1
+            w.setCurrentIndex(max(0, idx))
+            w.setToolTip(fm.description)
+            return w
+
         if fm.field_type in ("mmdevice_capture", "mmdevice_render"):
             w = QComboBox()
-            w.addItem("🔧 System Default (role)", "")
+            empty = ("🔧 Auto from Interview Headset" if fm.key.startswith("interview_")
+                     else "🔧 System Default (role)")
+            w.addItem(empty, "")
             flow = 2 if fm.field_type == "mmdevice_capture" else 3
             try:
                 from jarvis import native_audio as _na
@@ -1407,6 +1790,141 @@ class SettingsWindow(QDialog):
             w.setPlaceholderText("Leave empty for default")
         w.setToolTip(fm.description)
         return w
+
+    # -- Colour picker / slider fields -----------------------------------------
+
+    @staticmethod
+    def _rgb_to_hex(rgb) -> str:
+        """Float 0..1 triple to ``#rrggbb``."""
+        try:
+            r, g, b = (float(x) for x in rgb)
+        except (TypeError, ValueError):
+            return "#8c00ff"
+        return "#{:02x}{:02x}{:02x}".format(
+            max(0, min(255, round(r * 255))),
+            max(0, min(255, round(g * 255))),
+            max(0, min(255, round(b * 255))),
+        )
+
+    def _parse_current_rgb(self, current) -> tuple:
+        """Config value (hex string, 'r,g,b' string, or list) to float triple."""
+        from jarvis.integrations.voice_pe.led import parse_hex_rgb
+
+        if current is None:
+            return (0.55, 0.0, 1.0)
+        if isinstance(current, str):
+            parsed = parse_hex_rgb(current)
+            if parsed is not None:
+                return parsed
+            return (0.55, 0.0, 1.0)
+        if isinstance(current, (list, tuple)) and len(current) == 3:
+            try:
+                return tuple(float(x) for x in current)
+            except (TypeError, ValueError):
+                return (0.55, 0.0, 1.0)
+        return (0.55, 0.0, 1.0)
+
+    def _create_color_widget(self, fm: FieldMeta, current) -> QWidget:
+        """A swatch button + hex readout that opens a colour dialog."""
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        rgb = self._parse_current_rgb(current)
+        button = QPushButton()
+        button.setMinimumWidth(120)
+        button.setToolTip("Click to pick a colour")
+
+        hex_label = QLineEdit()
+        hex_label.setFixedWidth(90)
+        hex_label.setToolTip("Hex colour, e.g. 8c00ff or #8c00ff")
+
+        def _refresh() -> None:
+            hex_text = self._rgb_to_hex(rgb)
+            button.setText(hex_text)
+            button.setStyleSheet(
+                f"QPushButton {{ background-color: {hex_text}; "
+                f"color: {'#ffffff' if _relative_luminance(rgb) < 0.5 else '#000000'}; "
+                f"border: 1px solid #3f3f46; border-radius: 4px; }}"
+            )
+            hex_label.setText(hex_text.lstrip("#"))
+
+        def _pick() -> None:
+            nonlocal rgb
+            initial = QColor(self._rgb_to_hex(rgb))
+            chosen = QColorDialog.getColor(initial, box, "LED Ring Colour")
+            if chosen.isValid():
+                rgb = (chosen.red() / 255.0, chosen.green() / 255.0,
+                       chosen.blue() / 255.0)
+                _refresh()
+
+        def _hex_edited() -> None:
+            nonlocal rgb
+            text = hex_label.text().strip()
+            if not text:
+                return
+            from jarvis.integrations.voice_pe.led import parse_hex_rgb
+
+            parsed = parse_hex_rgb(text)
+            if parsed is not None:
+                rgb = parsed
+                _refresh()
+
+        button.clicked.connect(_pick)
+        hex_label.editingFinished.connect(_hex_edited)
+        row.addWidget(button)
+        row.addWidget(hex_label)
+        row.addStretch()
+
+        # Stash the live float triple for _get_value.
+        box._rgb = rgb
+        box._refresh = _refresh  # noqa: B010
+        box.setToolTip(fm.description)
+        _refresh()
+        return box
+
+    def _create_slider_widget(self, fm: FieldMeta, current) -> QWidget:
+        """A horizontal slider + live value label for float 0..1 ranges."""
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(10)
+
+        slider = QSlider()
+        slider.setOrientation(Qt.Orientation.Horizontal)
+        lo = float(fm.min_val if fm.min_val is not None else 0.0)
+        hi = float(fm.max_val if fm.max_val is not None else 1.0)
+        slider.setMinimum(0)
+        slider.setMaximum(1000)
+        try:
+            cur = float(current) if current is not None else lo
+        except (TypeError, ValueError):
+            cur = lo
+        cur = max(lo, min(hi, cur))
+        slider.setValue(round((cur - lo) / max(hi - lo, 1e-9) * 1000))
+
+        value_label = QLabel()
+        value_label.setFixedWidth(52)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                                 | Qt.AlignmentFlag.AlignVCenter)
+        suffix = fm.suffix or ""
+        value_label.setText(f"{cur:.2f}{(' ' + suffix) if suffix else ''}")
+
+        def _update(value: int) -> None:
+            frac = value / 1000.0
+            v = lo + (hi - lo) * frac
+            value_label.setText(f"{v:.2f}{(' ' + suffix) if suffix else ''}")
+
+        slider.valueChanged.connect(_update)
+        row.addWidget(slider)
+        row.addWidget(value_label)
+
+        box._slider = slider
+        box._lo = lo
+        box._hi = hi
+        box.setToolTip(fm.description)
+        return box
 
     # -- Model dropdown helpers -----------------------------------------------
 
@@ -1690,7 +2208,7 @@ class SettingsWindow(QDialog):
         for name, cfg in self._mcp_configs.items():
             catalogue_entry = CATALOGUE_BY_NAME.get(name)
             if catalogue_entry:
-                display = f"{catalogue_entry.display_name}  ({name})"
+                display = f"{catalogue_entry.localized().display_name}  ({name})"
             else:
                 display = f"🔌 {name}"
             self._mcp_list.addItem(display)
@@ -1785,10 +2303,32 @@ class SettingsWindow(QDialog):
         if fm.field_type == "float":
             return round(w.value(), 3)
 
-        if fm.field_type in ("choice", "device", "mmdevice_capture", "mmdevice_render"):
+        if fm.field_type == "color":
+            rgb = getattr(w, "_rgb", None)
+            default = self._defaults.get(fm.key)
+            if rgb is None:
+                return default
+            if isinstance(default, (list, tuple)) and len(default) == 3:
+                try:
+                    if tuple(float(x) for x in default) == tuple(float(x) for x in rgb):
+                        return list(default) if isinstance(default, list) else default
+                except (TypeError, ValueError):
+                    pass
+            return f"{rgb[0]:.2f},{rgb[1]:.2f},{rgb[2]:.2f}"
+
+        if fm.field_type == "slider":
+            slider = getattr(w, "_slider", None)
+            lo = float(getattr(w, "_lo", 0.0))
+            hi = float(getattr(w, "_hi", 1.0))
+            if slider is None:
+                return self._defaults.get(fm.key)
+            return round(lo + (hi - lo) * (slider.value() / 1000.0), 3)
+
+        if fm.field_type in ("choice", "device", "mmdevice_capture",
+                             "mmdevice_render", "interview_headset"):
             val = w.currentData()
             if val == "":
-                return None
+                return None if fm.field_type != "interview_headset" else "Plantronics"
             # Choice item data is a string on some entries and an int on others;
             # the declared default decides the stored type.
             if isinstance(self._defaults.get(fm.key), int):
@@ -1854,9 +2394,27 @@ class SettingsWindow(QDialog):
 
         if _save_json(self._config_path, config):
             debug_log("settings saved to config.json", "settings")
+            try:
+                disable_wake = bool(config.get(
+                    "voice_pe_disable_wake_words",
+                    self._defaults.get("voice_pe_disable_wake_words", True),
+                ))
+                from jarvis.daemon import get_voice_pe_manager
+
+                manager = get_voice_pe_manager()
+                if manager is not None and hasattr(manager, "apply_wake_word_setting"):
+                    manager.apply_wake_word_setting(disable_wake)
+                    debug_log(
+                        f"voice_pe wake words applied live disable={disable_wake}",
+                        "settings",
+                    )
+            except Exception as exc:
+                debug_log(f"voice_pe live apply skipped: {exc}", "settings")
+            self._apply_voice_pe_led_live(config)
             QMessageBox.information(
                 self, "✅ Saved",
-                "Settings saved. Restart Toustovač for changes to take effect."
+                "Settings saved. Voice PE wake words and LED ring "
+                "apply live; other categories may need a restart."
             )
             self.accept()
         else:
@@ -1864,6 +2422,58 @@ class SettingsWindow(QDialog):
                 self, "⚠️ Error",
                 f"Could not save settings to:\n{self._config_path}"
             )
+
+    def _apply_voice_pe_led_live(self, config: dict) -> None:
+        """Push the LED ring colour/brightness to paired satellites live.
+
+        Runs after a settings save so the user sees the new LED ring on the
+        Voice PE hardware immediately — no app restart needed. Fail-open:
+        any error only logs, the saved config is still authoritative for the
+        next daemon start.
+        """
+        try:
+            rgb = config.get("voice_pe_led_rgb",
+                             self._defaults.get("voice_pe_led_rgb"))
+            brightness = config.get("voice_pe_led_brightness",
+                                    self._defaults.get("voice_pe_led_brightness"))
+            if rgb is None and brightness is None:
+                return
+            rgb_t = self._parse_current_rgb(rgb)
+            try:
+                level = float(brightness) if brightness is not None else 0.66
+            except (TypeError, ValueError):
+                level = 0.66
+            level = max(0.0, min(1.0, level))
+
+            from jarvis.daemon import get_voice_pe_manager
+
+            manager = get_voice_pe_manager()
+            if manager is None or not hasattr(manager, "set_led"):
+                return
+            loop = getattr(manager, "_loop", None)
+            if loop is None:
+                debug_log("voice_pe live LED skipped: manager loop not ready",
+                          "settings")
+                return
+            import asyncio
+
+            for device in manager.devices:
+                key = str(getattr(device, "_host", "") or "")
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        manager.set_led(key, rgb_t, level), loop,
+                    )
+                except Exception as exc:
+                    debug_log(
+                        f"voice_pe live LED apply failed for {key}: {exc}",
+                        "settings",
+                    )
+            debug_log(
+                f"voice_pe LED applied live rgb={rgb_t} brightness={level}",
+                "settings",
+            )
+        except Exception as exc:
+            debug_log(f"voice_pe live LED apply skipped: {exc}", "settings")
 
     def _on_reset(self) -> None:
         """Reset all fields to defaults."""
@@ -1920,7 +2530,8 @@ class SettingsWindow(QDialog):
             except (TypeError, ValueError):
                 w.setValue(0.0)
 
-        elif fm.field_type in ("choice", "device", "mmdevice_capture", "mmdevice_render"):
+        elif fm.field_type in ("choice", "device", "mmdevice_capture",
+                               "mmdevice_render", "interview_headset"):
             idx = _select_choice_index(
                 w, "" if value in (None, "") else value
             )
@@ -1941,6 +2552,21 @@ class SettingsWindow(QDialog):
         elif fm.field_type == "password":
             # Masked QLineEdit shares the plain string handling below.
             w.setText(str(value) if value not in (None, "") else "")
+
+        elif fm.field_type == "color":
+            w._rgb = self._parse_current_rgb(value)
+            if hasattr(w, "_refresh"):
+                w._refresh()
+
+        elif fm.field_type == "slider":
+            lo = float(getattr(w, "_lo", 0.0))
+            hi = float(getattr(w, "_hi", 1.0))
+            try:
+                cur = float(value) if value is not None else lo
+            except (TypeError, ValueError):
+                cur = lo
+            cur = max(lo, min(hi, cur))
+            w._slider.setValue(round((cur - lo) / max(hi - lo, 1e-9) * 1000))
 
         else:  # str
             w.setText(str(value) if value not in (None, "") else "")
@@ -1996,6 +2622,7 @@ class _MCPCatalogueDialog(QDialog):
         inner_layout.setSpacing(8)
 
         for entry in CATALOGUE:
+            localized = entry.localized()
             card = QFrame()
             card.setObjectName("card")
             card_layout = QHBoxLayout(card)
@@ -2014,11 +2641,11 @@ class _MCPCatalogueDialog(QDialog):
             text_layout = QVBoxLayout()
             text_layout.setSpacing(2)
 
-            name_label = QLabel(entry.display_name)
+            name_label = QLabel(localized.display_name)
             name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
             text_layout.addWidget(name_label)
 
-            desc_label = QLabel(entry.description)
+            desc_label = QLabel(localized.description)
             desc_label.setWordWrap(True)
             desc_label.setStyleSheet("color: #a1a1aa; font-size: 12px;")
             text_layout.addWidget(desc_label)

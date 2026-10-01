@@ -1,0 +1,94 @@
+{
+  "phase": "PHASE 1 SDR->HDR SHOWROOM ENGINE",
+  "candidate": "SHOWROOM_D",
+  "date": "2026-10-01",
+  "architecture": "HDRTVNet++ NPU (structure) -> deterministic nit-targeted luminance remap (PCHIP, soft knee 800-1000, cap ~1200) -> libplacebo presentation -> QSV HEVC Main10 HDR10",
+  "source": "ONNX_NPU.mp4 (HDRTVNet++ NPU fp16, bt2020/pq 10bit tv)",
+  "curve_control_points_input_nits": [0, 1, 3, 8, 20, 45, 69.5, 120, 200, 345.5, 550, 750, 943.5, 1150, 1448, 2200, 4000, 10000],
+  "curve_control_points_output_nits": [0, 1.2, 4, 11, 30, 80, 130, 210, 330, 540, 760, 920, 950, 1030, 1150, 1180, 1200, 1205],
+  "curve_anchors": {
+    "P50": {"input": 69.5, "output": 130},
+    "P90": {"input": 345.5, "output": 540},
+    "P99": {"input": 943.5, "output": 950},
+    "max": {"input": 1448, "output": 1150},
+    "soft_knee_region": "800-1000 nits",
+    "hard_cap_nits": 1205
+  },
+  "no_pq_contrast_amplifier": true,
+  "curves_domain": "gbrp10le full-range RGB, same PCHIP curve on R/G/B (canonical master curve), points = PQ signal V = pq_inv(nits/10000)",
+  "libplacebo_stage": "tonemapping=none, gamut_mode=perceptual, format=yuv420p10le, bt2020/smpte2084, peak_detect=false, extra_opts=gamut_expansion=on, saturation=1.04",
+  "qsv_stage": "HEVC Main10 yuv420 bt2020nc/smpte2084, max-cll 1000,400, MD L(10000000,1), ICQ23",
+  "metrics_halfres": {
+    "frames_sampled": 299,
+    "P50": {"onnx_npu": 69.5, "showroom_d": 125.5},
+    "P90": {"onnx_npu": 345.5, "showroom_d": 540.5},
+    "P95": {"onnx_npu": 460.5, "showroom_d": 674.5},
+    "P99": {"onnx_npu": 943.5, "showroom_d": 962.5},
+    "max_halfres_bicubic_artifact": {"onnx_npu": 1448.0, "showroom_d": 1730.0},
+    "pixels_gt_1000_nits_pct": {"onnx_npu": 0.523, "showroom_d": 0.278},
+    "pixels_800_1000_nits_pct": {"onnx_npu": 1.491, "showroom_d": 3.076},
+    "pixels_gt_600_nits_pct": {"onnx_npu": 3.279, "showroom_d": 7.219},
+    "black_p1_code": {"onnx_npu": 151.5, "showroom_d": 156.5},
+    "black_p5_code": {"onnx_npu": 214.5, "showroom_d": 225.5},
+    "skin_hue_delta_deg": 0.93,
+    "skin_chroma_delta_pct": 2.5,
+    "edge_overshoot_frac_pct": 0.0
+  },
+  "temporal": {
+    "p99_mean_nits": 843.6,
+    "p99_cv_pct": 18.27,
+    "p99_cv_onnx_npu_pct": 34.6,
+    "mean_luma_nits": 211.0,
+    "mean_cv_pct": 17.43,
+    "p99_min_nits": 613.1,
+    "p99_max_nits": 1004.2
+  },
+  "fullres_whole_clip": {
+    "onnx_npu": {"P50": 66.5, "P90": 345.5, "P95": 456.5, "P99": 943.5, "max": 2046},
+    "showroom_d_stage1_clean": {"P50": 122.5, "P90": 540.5, "P95": 666.5, "P99": 962.5, "max": 1212},
+    "showroom_d_final_master_cqp": {"P50": 122.5, "P90": 540.5, "P95": 666.5, "P99": 962.5, "max": 1360},
+    "showroom_d_old_icq23": {"max": 2345, "note": "superseded by anti-ringing pass (doc 47)"},
+    "lp_b_final_qsv": {"P50": 255.5, "P90": 1004.5, "P95": 1162.5, "P99": 1277.5, "max": 2833},
+    "note": "final-encode max includes QSV edge ringing; anti-ringing pass selected CQP QP22 + quality best (max 1360, PSNR-Y 57.0 dB, 34.5 Mbps)"
+  },
+  "qsv_anti_ringing_sweep": {
+    "baseline_icq23_max_nits": 2345,
+    "icq18": {"max_nits": 1881, "bitrate_mbps": 14.5, "psnr_y_db": 53.71, "luma_mae": 1.381},
+    "icq15": {"max_nits": 1712, "bitrate_mbps": 17.8, "psnr_y_db": 54.81, "luma_mae": 1.238},
+    "icq12": {"max_nits": 1558, "bitrate_mbps": 23.5, "psnr_y_db": 55.56, "luma_mae": 1.16},
+    "cqp_qp22": {"max_nits": 1389, "bitrate_mbps": 34.4, "psnr_y_db": 56.97, "luma_mae": 1.005},
+    "cqp_qp22_best": {"max_nits": 1360, "bitrate_mbps": 34.5, "psnr_y_db": 57.0, "luma_mae": 1.002, "selected": true},
+    "notes": [
+      "percentiles identical across all modes (envelope untouched)",
+      "QSV driver clamps CQP QP to min 22",
+      "ffmpeg psnr filter down-converts to 8-bit (unusable); PSNR-Y computed manually on raw 10-bit luma, peak 1023"
+    ]
+  },
+  "engineering_findings": [
+    "FFmpeg 9 curves filter normalizes points in signal domain (PQ V), not code/1023; for gbrp10le use x=y=pq_inv(nits/10000)",
+    "RGB-domain master curve (same curve on R/G/B) preserves skin hue (+0.37 deg) vs YUV master (+2.74 deg)",
+    "FFmpeg 9 drawtext drive-letter escaping needs double backslash (C\\:/...)",
+    "select='not(mod(n,10))' is a no-op in FFmpeg 9.0.2 (metric scripts sample every frame; consistent across all candidates)",
+    "half-res bicubic metrics under-report true max (ONNX 1448 half-res vs 2046 full-res) and can show overshoot"
+  ],
+  "tv_verification": {
+    "source": "showroom:tbsY9zC-w6U:compare",
+    "deck": ["LIBPLACEBO B (LP_B)", "HDRTVNET NPU (ONNX_NPU)", "SHOWROOM D"],
+    "clients": 1,
+    "avg_mbps": 12.4,
+    "idr": "incrementing",
+    "drops": 0,
+    "sink": "Samsung 65in 2019, supportedHdrTypes=[2,3,4], mMaxLuminance=1000.0, HDR_CONVERSION_PASSTHROUGH, 4K60 active, AMLogic video plane"
+  },
+  "artifacts": [
+    "%TEMP%\\kilo\\showroom\\phase1\\SHOWROOM_D.mp4",
+    "%TEMP%\\kilo\\showroom\\phase1\\intermediates\\D.s1_remap.mkv",
+    "%TEMP%\\kilo\\showroom\\phase1\\build_showroom_d.py",
+    "%TEMP%\\kilo\\showroom\\phase1\\showroom_D_curve.gp",
+    "%TEMP%\\kilo\\showroom\\phase1\\showroom_phase1_v2_compare.mp4",
+    "%TEMP%\\kilo\\showroom\\phase1\\frames\\seg2_{lp,onnx,d}.png",
+    "%LOCALAPPDATA%\\VIVERRA\\Toastovac\\videos\\tbsY9zC-w6U\\enhanced\\showroom_compare.mp4",
+    "%LOCALAPPDATA%\\VIVERRA\\Toastovac\\videos\\tbsY9zC-w6U\\enhanced\\showroom_c.mp4"
+  ],
+  "pending": "user TV verdict on 3-way deck; then P25 full-clip render of winner"
+}

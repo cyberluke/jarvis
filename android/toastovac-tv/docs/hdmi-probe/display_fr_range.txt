@@ -1,0 +1,2 @@
+=== fr_range ===
+cat: /sys/class/display/fr_range: Permission denied

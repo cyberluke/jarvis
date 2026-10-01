@@ -119,6 +119,8 @@ class RuntimeStatusSnapshot:
     # One-line Clean Microphone (Windows virtual microphone) summary, taken
     # from the in-process publisher and the Voice PE desktop leases.
     virtual_microphone: str = "disabled"
+    # One-line Voice PE WebAudio bridge summary (protocol v271-webaudio/1).
+    voice_pe_bridge: str = "disabled"
 
 
 class RuntimeStatusSignals(QObject):
@@ -219,9 +221,11 @@ def _collect_runtime_status_snapshot(
             if _vp_manager is not None:
                 _vp_devices = (_vp_manager.health() or {}).get("devices") or []
                 if _vp_devices:
+                    from jarvis.utils.numbers import format_ms
+
                     voice_pe_summary = "; ".join(
                         f"{_d.get('device')} {_d.get('device_state')} "
-                        f"queue={_d.get('audio_queue_ms')}ms"
+                        f"queue={format_ms(_d.get('audio_queue_ms'))}"
                         for _d in _vp_devices
                     )
         except Exception as exc:
@@ -245,6 +249,30 @@ def _collect_runtime_status_snapshot(
     except Exception as exc:
         debug_log(f"runtime status Clean Mic check failed: {exc}", "desktop")
 
+    # Voice PE WebAudio bridge one-line summary.
+    voice_pe_bridge_summary = "disabled"
+    try:
+        from jarvis.daemon import get_voice_pe_bridge
+
+        _vpb = get_voice_pe_bridge()
+        if _vpb is not None:
+            _vpb_health = _vpb.health()
+            _vpb_metrics = _vpb_health.get("metrics", {})
+            _vpb_rejected = (
+                int(_vpb_metrics.get("rejected_auth", 0) or 0)
+                + int(_vpb_metrics.get("rejected_origin", 0) or 0)
+            )
+            voice_pe_bridge_summary = (
+                f"{'running' if _vpb_health.get('running') else 'stopped'} "
+                f"(ws://127.0.0.1:{_vpb_health.get('port')}/voice-pe/v1, "
+                f"clients={_vpb_health.get('clients')}/"
+                f"{_vpb_health.get('max_clients')}, "
+                f"attached={'yes' if _vpb_health.get('attached') else 'no'}, "
+                f"rejected={_vpb_rejected})"
+            )
+    except Exception as exc:
+        debug_log(f"runtime status Voice PE bridge check failed: {exc}", "desktop")
+
     return RuntimeStatusSnapshot(
         daemon_state="Listening" if is_listening else "Stopped",
         daemon_mode="bundled" if is_bundled else "subprocess",
@@ -262,6 +290,7 @@ def _collect_runtime_status_snapshot(
         mcp_count=mcp_count,
         voice_pe=voice_pe_summary,
         virtual_microphone=virtual_microphone_summary,
+        voice_pe_bridge=voice_pe_bridge_summary,
     )
 
 
@@ -299,6 +328,7 @@ def _runtime_status_rows(snapshot: RuntimeStatusSnapshot) -> list[tuple[str, str
         ("🔌 MCP", "Configured servers", str(snapshot.mcp_count)),
         ("🛰️ Voice PE", "Status", snapshot.voice_pe),
         ("🛰️ Voice PE", "Clean Mic", snapshot.virtual_microphone),
+        ("🛰️ Voice PE", "WebAudio Bridge", snapshot.voice_pe_bridge),
     ]
 
 
@@ -1338,10 +1368,10 @@ class LogViewerWindow(QMainWindow):
         self.append_log("🚀 Toustovač Log Viewer Ready\n" + _LOG_SEPARATOR + "\n\n")
 
     def append_log(self, text: str) -> None:
-        """Append text to the log display."""
-        self.log_display.moveCursor(QTextCursor.MoveOperation.End)
-        self.log_display.insertPlainText(text)
-        self.log_display.moveCursor(QTextCursor.MoveOperation.End)
+        """Append text to the log display without auto-scrolling to the bottom."""
+        cursor = self.log_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text)
 
     def clear_logs(self) -> None:
         """Clear all logs."""
@@ -2855,6 +2885,16 @@ class JarvisSystemTray:
             "desktop",
         )
 
+        # Re-entry guard: the bundled wait loop below pumps Qt events, so a
+        # second Quit click (or cleanup_on_exit after quit_app) can nest a
+        # second stop_daemon call — creating a duplicate diary dialog and a
+        # second unbounded wait. Skip nested calls instead.
+        if getattr(self, "_daemon_stop_in_progress", False):
+            debug_log("stop_daemon already in progress; skipping nested call",
+                      "desktop")
+            return
+        self._daemon_stop_in_progress = True
+
         try:
             self._daemon_stop_expected = True
             self._set_chat_daemon_status("stopping")
@@ -2912,8 +2952,11 @@ class JarvisSystemTray:
                             self.log_signals.new_log.emit("⚠️ Daemon taking longer than expected...\n")
                             debug_log("daemon thread not responding to stop request", "desktop")
                             warned = True
-                        # Keep waiting up to 3x the timeout before giving up
-                        if elapsed > shutdown_wait_timeout_sec * 3:
+                        # Bounded give-up: a further 30s past the warning.
+                        # The daemon's diary update is capped at 45s, so a
+                        # stop beyond ~90s means it is wedged; proceed with
+                        # the quit anyway (process teardown kills the QThread).
+                        if elapsed > shutdown_wait_timeout_sec + 30:
                             self.log_signals.new_log.emit("⚠️ Giving up waiting for daemon\n")
                             break
                         time.sleep(0.05)
@@ -2936,8 +2979,9 @@ class JarvisSystemTray:
                     if not self.daemon_thread.wait(shutdown_wait_timeout_sec * 1000):
                         self.log_signals.new_log.emit("⚠️ Daemon taking longer than expected...\n")
                         debug_log("daemon thread not responding to stop request", "desktop")
-                        # Wait up to 3x timeout total before giving up
-                        self.daemon_thread.wait(shutdown_wait_timeout_sec * 2000)
+                        # Bounded give-up: one more 30s window, then proceed
+                        # with the quit regardless (process teardown kills it).
+                        self.daemon_thread.wait(30 * 1000)
 
                 self.daemon_thread = None
             elif self.daemon_process:
@@ -3085,6 +3129,7 @@ class JarvisSystemTray:
             # Ensure dialog is closed
             if diary_dialog:
                 diary_dialog.close()
+            self._daemon_stop_in_progress = False
 
     def check_daemon_status(self) -> None:
         """Check if the daemon process/thread is still running."""
@@ -3367,6 +3412,14 @@ class ServerCheckWorker(KeepAliveWorker):
 
 def main() -> int:
     """Main entry point for the desktop app."""
+    # Isolated STT worker entry (frozen re-exec): the daemon spawns this
+    # bundle with JARVIS_STT_WORKER=1 to run the faster-whisper model in a
+    # separate process (its own GIL), never loading the Qt UI.
+    if os.environ.get("JARVIS_STT_WORKER") == "1":
+        from jarvis.listening.fasterwhisper_worker import main as _stt_worker_main
+
+        return _stt_worker_main()
+
     # Smoke-test fast path: runs before any UI, crash logging, or setup checks.
     if "--smoke-test" in set(sys.argv[1:]):
         return _smoke_test_main()

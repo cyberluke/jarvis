@@ -5,17 +5,17 @@
   "device_id": "",
   "connection_generation": 0,
   "session_generation": 0,
-  "capture_endpoint": {"id": "{0.0.1.00000000}.{2048bdf6-c3a5-41b9-865a-de6663e26ca0}", "name": "Headset Microphone (Plantronics Blackwire 3220 Series)", "rate_hz": 48000, "channels": 2, "format": 0},
-  "render_endpoint": {"id": "{0.0.0.00000000}.{13b4d8f0-16e1-4966-82c8-779d94417dbb}", "name": "Speakers (Realtek(R) Audio)", "rate_hz": 48000, "channels": 2, "format": 0},
+  "capture_endpoint": {"id": "{0.0.1.00000000}.{eac340e0-b00c-468a-bb1d-e64e37d65ebc}", "name": "Headset Microphone (Plantronics Blackwire 3220 Series)", "rate_hz": 48000, "channels": 2, "format": 0},
+  "render_endpoint": {"id": "{0.0.0.00000000}.{dc0bd3f9-edfc-437a-8355-2701a8828408}", "name": "SAMSUNG -2 (HD Audio Driver for Display Audio)", "rate_hz": 48000, "channels": 2, "format": 0},
   "reference_tap": 2, "reference_active": 0,
-  "frame_count": 22, "frame_samples": 480,
+  "frame_count": 19, "frame_samples": 480,
   "capture_start_s": 0.000000, "capture_stride_s": 0.01,
   "aec_state": 1, "estimated_delay_ms": -999.000, "delay_confidence": 0.000,
   "erle_db": -999.000, "erl_db": -999.000, "residual_echo_likelihood": 0.000,
   "drift_ppm": {"satellite": 0.000},
   "resampler_ratio": 0.999897087,
   "queue": {"jitter_depth_ms": 0.000, "capture_queue_ms": 0.000, "reference_window_ms": 5120.000},
-  "counters": {"overruns": 0, "underruns": 12, "dropped": 0, "duplicates": 0, "discontinuities": 1, "reconvergences": 1, "limiter_hits": 0},
-  "latency_ms": {"p50": 0.016, "p95": 0.268, "max": 0.280},
-  "wav_sha256": "75684e30eb995aa2d233c10e5daeda92c722645afedd9e71c1facf8d720cc7e5"
+  "counters": {"overruns": 0, "underruns": 11, "dropped": 0, "duplicates": 0, "discontinuities": 0, "reconvergences": 1, "limiter_hits": 0},
+  "latency_ms": {"p50": 0.070, "p95": 0.097, "max": 0.097},
+  "wav_sha256": "752966fa2e47793a3c3dc1399191965d70ae4305a151c4cd93b6978e30cd55e1"
 }

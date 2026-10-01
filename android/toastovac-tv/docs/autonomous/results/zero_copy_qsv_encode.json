@@ -1,0 +1,96 @@
+{
+  "report": "24_zero_copy_qsv_encode",
+  "status": "working",
+  "summary": "Zero-copy native GPU->QSV HEVC Main10 4K encode path is fully functional. SceneGraph -> D3D11 render (RGBA16F) -> compute convert into P010 encoder surface (UAV) -> MFXVideoENCODE -> Annex-B HEVC. No CPU pixels anywhere (readback_bytes_per_frame=0).",
+  "date": "2026-09-30",
+  "environment": {
+    "gpu": "Intel Meteor Lake VEN_8086 DEV_7D67",
+    "driver": "32.0.101.8991",
+    "vpl": "libvpl.dll 2.17, impl mfx-gen, impl_flags 0x302 (HARDWARE|VIA_D3D11)",
+    "rust": "1.88 + windows-rs 0.61",
+    "ffmpeg_reference": "7.1.1 gyan --enable-libvpl (hevc_qsv 4K main10 P010 video-memory verified)"
+  },
+  "measurements": {
+    "no_pace_10f":   { "encoded_fps": 78.5,  "encode_ms": 4.1,   "frame_ms": 9.4,   "aus": 9 },
+    "no_pace_60f":   { "encoded_fps": 104.2, "encode_ms": 6.67,  "frame_ms": 9.16,  "aus": 60, "deadline_misses": 0 },
+    "paced_4k30_61f": { "produced_fps": 30.28, "encoded_fps": 29.78, "frame_ms": 0.91, "deadline_misses": 2, "aus": 60, "wall_s": 2.01 }
+  },
+  "output_validation": {
+    "codec_name": "hevc",
+    "profile": "Main 10",
+    "width": 3840,
+    "height": 2160,
+    "pix_fmt": "yuv420p10le",
+    "level": 150,
+    "decode_rc": 0,
+    "nb_read_frames": 61,
+    "samples": [
+      "C:\\Users\\LUKES~1.COR\\AppData\\Local\\Temp\\kilo\\test_10.hevc",
+      "C:\\Users\\LUKES~1.COR\\AppData\\Local\\Temp\\kilo\\test_paced.hevc"
+    ]
+  },
+  "root_causes_fixed": [
+    {
+      "symptom": "MFXVideoENCODE_QueryIOSurf failed: -15 (MFX_ERR_INVALID_VIDEO_PARAM) in every configuration",
+      "fix": "Skipped QueryIOSurf entirely (oneVPL hello-encode does not call it); fixed surface pool of 8. TOASTOVAC_SKIP_IOSURF=1 is now the default path.",
+      "source": "hevcehw_base_legacy.cpp Legacy::QueryIOSurf validation could not be satisfied with FFmpeg-identical params"
+    },
+    {
+      "symptom": "MFXVideoENCODE_EncodeFrameAsync failed: -2 (MFX_ERR_NULL_PTR)",
+      "fix": "Pass a real mfxBitstream (was null_mut). hevcehw_base_impl.cpp EncodeFrameCheck starts with MFX_CHECK_NULL_PTR2(bs, pEntryPoint) - the bitstream is mandatory.",
+      "source": "hevcehw_base_impl.cpp"
+    },
+    {
+      "symptom": "EncodeFrameAsync failed: -5 (MFX_ERR_NOT_ENOUGH_BUFFER)",
+      "fix": "BITSTREAM_CAP 4MiB -> 16MiB. hevcehw_base_legacy.cpp BLK_CheckBsData requires MaxLength >= BufferSizeInKB*1000 (5,000,000 bytes for buf=5000).",
+      "source": "hevcehw_base_legacy.cpp BLK_CheckBsData"
+    },
+    {
+      "symptom": "MFXVideoCORE_SyncOperation failed: -2; tasks never produced AUs",
+      "fix": "GetHDL must FILL the runtime's mfxHDLPair buffer { first: ID3D11Texture2D*, second: 0 } (FFmpeg hwcontext_qsv.c frame_get_hdl convention). Our old callback returned a pointer to a stack-local pair (dangling) and later NULL_PTR for empty pairs, killing the encode task's texture resolution.",
+      "source": "FFmpeg hwcontext_qsv.c frame_get_hdl + runtime allocator contract"
+    },
+    {
+      "symptom": "MFXVideoENCODE_Query with separate output struct returns -2",
+      "fix": "Use in-place Query (same struct in/out) like the working path; the runtime's CheckBuffers requires out->NumExtParam == in->NumExtParam, so a zeroed separate output throws (caught as NULL_PTR). Re-assert IOPattern/NumExtParam/ExtParam after the in-place call rewrites the capability struct.",
+      "source": "hevcehw_base_legacy.cpp CheckBuffers"
+    },
+    {
+      "symptom": "status values misinterpreted (WRN_DEVICE_BUSY=2 treated as fatal)",
+      "fix": "oneVPL 2.x renumbered statuses: WRN_IN_EXECUTION=1, WRN_DEVICE_BUSY=2, NOT_INITIALIZED=-8, MORE_DATA=-10. Constants already matched vpl_api headers; added DEVICE_BUSY retry loop like FFmpeg qsvenc.c.",
+      "source": "vpl_api/mfxdefs.h + libmfxsw_async.cpp"
+    }
+  ],
+  "known_limitations": [
+    {
+      "item": "Ext buffers (AUDelimiter, RepeatPPS, mfxExtVideoSignalInfo, MasteringDisplay/ContentLightLevel SEI) are NOT consumed by the runtime Init path: output has no AUD NALs (0/60), PPS repeated only at IDR points (2/60), VUI color info unknown. Runtime support exists (m_ebCopySupported lists CDOP/CDO2/VSIN) but Init ignores the attached buffers. Needs runtime-level investigation (possible MFXVideoENCODE_UpdateVideoParam path or per-frame EncodeCtrl ext attach).",
+      "impact": "Stream currently lacks HDR VUI/SEI signaling; TV would not auto-switch to HDR."
+    },
+    {
+      "item": "Standalone runs cap at 61 frames due to stdin-EOF early-exit (eof && rendered > 60). Live pipeline feeds stdin continuously, so unaffected.",
+      "impact": "Test harness only."
+    },
+    {
+      "item": "TOASTOVAC_SKIP_IOSURF=1 (fixed 8-surface pool) is required; QueryIOSurf remains -15.",
+      "impact": "Pool size fixed at 8; adequate for async_depth 2 with serialized submits."
+    }
+  ],
+  "tzhl_integration": {
+    "status": "working",
+    "source": "native",
+    "report": "27_tzhl_native_integration",
+    "cast_host": "tools/live_hdr/cast_host.py --source native",
+    "pump": "pump_native exact-read framed stdout, kind-1 AU -> AU assembler -> TZHL :8768",
+    "state_feed": "native_state_loop framed JSON at FPS (live/fps/pq HUD)",
+    "verification": {
+      "pipe_test": { "rc": 0, "aus": 29, "metrics": 1, "events": 2, "bytes_parsed": 6551 },
+      "live_status": { "source": "native", "producer_alive": true, "idr_sent": 12, "bytes_sent": 75975, "growing": true }
+    },
+    "known_gap": "box reconnect is client-side (clients=0 after cast_host restarts); idr_sent/bytes_sent prove the delivery path"
+  },
+  "next": [
+    "4K60 profile verification",
+    "HDR VUI/SEI signaling via UpdateVideoParam or per-frame EncodeCtrl ext attach",
+    "Reports 25-26, 28 + final status update"
+  ]
+}

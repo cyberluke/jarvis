@@ -31,6 +31,28 @@ class MCPEntry:
     api_key_hint: Optional[str] = None     # Help text for obtaining the key
     wizard_featured: bool = False      # Show in setup wizard quick picks
     category: str = "general"          # Grouping for display
+    i18n_key: Optional[str] = None     # i18n.py key for display_name/description
+
+    def localized(self) -> "MCPEntry":
+        """Return a copy with display strings resolved for the UI language."""
+        if not self.i18n_key:
+            return self
+        from jarvis.i18n import tr
+
+        return MCPEntry(
+            name=self.name,
+            display_name=tr(f"mcp.{self.i18n_key}.name"),
+            description=tr(f"mcp.{self.i18n_key}.desc"),
+            command=self.command,
+            args=list(self.args),
+            env=dict(self.env),
+            needs_api_key=self.needs_api_key,
+            api_key_env_var=self.api_key_env_var,
+            api_key_hint=self.api_key_hint,
+            wizard_featured=self.wizard_featured,
+            category=self.category,
+            i18n_key=self.i18n_key,
+        )
 
     def to_config(self, extra_env: Optional[Dict[str, str]] = None) -> Dict:
         """Convert to the config.json MCP entry format.
@@ -175,6 +197,94 @@ CATALOGUE: List[MCPEntry] = [
         command="npx",
         args=["-y", "@modelcontextprotocol/server-everything"],
         category="files",
+    ),
+
+    # -- Desktop software & office-suite stack (heavy tech user) --------------
+    MCPEntry(
+        name="browsermcp",
+        display_name="🌐 Browser MCP",
+        description="Drive your real Chrome / Edge (including the BrowserOS Neo "
+                    "Chromium profile) — navigate, click, fill forms, read pages, "
+                    "take screenshots. Needs the free Browser MCP extension "
+                    "(browsermcp.io).",
+        command="npx",
+        args=["-y", "@browsermcp/mcp"],
+        api_key_hint="Install the Browser MCP extension from browsermcp.io "
+                     "and pair it once; no API key needed.",
+        category="automation",
+    ),
+    MCPEntry(
+        name="vscode",
+        display_name="🧩 VS Code",
+        description="Control Visual Studio Code — open files, run commands, "
+                    "read diagnostics, search the workspace. Companion of "
+                    "Kilo Code / Zoo Code style IDE agents.",
+        command="npx",
+        args=["-y", "vscode-mcp-server"],
+        category="dev",
+    ),
+    MCPEntry(
+        name="docker",
+        display_name="🐳 Docker",
+        description="Manage containers, images, volumes and logs on your local "
+                    "Docker daemon — status, start/stop, compose and cleanup "
+                    "from the chat (docker-mcp, MarkPhelps).",
+        command="npx",
+        args=["-y", "docker-mcp"],
+        category="dev",
+    ),
+    MCPEntry(
+        name="excel",
+        display_name="📊 Excel",
+        description="Read, edit and format Excel workbooks on this Windows "
+                    "machine via COM — sheets, cells, formulas and charts "
+                    "without leaving the chat.",
+        command="npx",
+        args=["-y", "@negokaz/excel-mcp-server"],
+        category="office",
+    ),
+    MCPEntry(
+        name="outlook",
+        display_name="📅 Outlook / Microsoft 365",
+        description="Mail, calendar and meetings through Microsoft Graph — "
+                    "read and send e-mail, create appointments, join and "
+                    "manage meetings. Requires an Azure app registration.",
+        command="npx",
+        args=["-y", "@mcp-z/mcp-outlook"],
+        needs_api_key=True,
+        api_key_env_var="AZURE_CLIENT_ID",
+        api_key_hint="Register an app at https://entra.microsoft.com, enable "
+                     "Microsoft Graph (Mail.ReadWrite, Calendars.ReadWrite) "
+                     "and put its client id/secret/tenant into env.",
+        category="office",
+    ),
+    MCPEntry(
+        name="email",
+        display_name="✉️ Email (IMAP/SMTP)",
+        description="Universal e-mail via IMAP + SMTP — read, search, draft "
+                    "and send from any provider (Gmail, Outlook, Exchange, "
+                    "own domain). No cloud API keys; use app passwords.",
+        command="npx",
+        args=["-y", "@breaker-email/mcp"],
+        needs_api_key=True,
+        api_key_env_var="IMAP_HOST",
+        api_key_hint="Provide IMAP_HOST / IMAP_USER / IMAP_PASSWORD and the "
+                     "SMTP equivalents as env vars (see github.com/breaker-email/mcp).",
+        category="office",
+    ),
+    MCPEntry(
+        name="youtube",
+        display_name="📺 YouTube",
+        description="YouTube data and management — search videos and channels, "
+                    "read statistics and comments, upload and manage playlists "
+                    "with a Google API key.",
+        command="npx",
+        args=["-y", "youtube-mcp"],
+        needs_api_key=True,
+        api_key_env_var="YOUTUBE_API_KEY",
+        api_key_hint="Get a key at https://console.cloud.google.com/apis "
+                     "→ YouTube Data API v3.",
+        category="media",
     ),
 ]
 

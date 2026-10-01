@@ -1,0 +1,65 @@
+{
+  "scenario": "interview_coach",
+  "status": "pass",
+  "duration_sec": 60.0,
+  "session_id": "fbb00d0afb",
+  "turns": 3,
+  "input_path": "InterviewBroker.inject_final (Whisper-final boundary)",
+  "checks": {
+    "wall_clock_60s": true,
+    "multiple_turns": true,
+    "each_answer_evaluated": true,
+    "tv_notes_short": true,
+    "no_duplicate_questions": true,
+    "state_ended": true
+  },
+  "tv_notes": [
+    "Solid. Next question.",
+    "Stop. The body does not run on call — only when iterated.",
+    "Good. Add: event loop."
+  ],
+  "questions": [
+    "What is the difference between a list and a tuple, and when would you pick each?",
+    "How does a generator function actually start executing?",
+    "Explain async/await in one short story: who yields, and to whom?"
+  ],
+  "answers": [
+    "Lists are mutable, tuples are not. I use tuples as dict keys and for fixed records, lists when I need to append.",
+    "A generator function returns an iterator immediately, and the body starts running as soon as you call it — that's why people put side effects at the top.",
+    "I think await just sleeps the thread."
+  ],
+  "evaluations": [
+    {
+      "correctness": "good",
+      "missing_point": "",
+      "missing_all": [],
+      "short_coach_note": "Solid. Next question.",
+      "seniority": "senior",
+      "clarity": "clear"
+    },
+    {
+      "correctness": "wrong",
+      "missing_point": "body runs only on iteration, not on call",
+      "missing_all": [
+        "body runs only on iteration, not on call"
+      ],
+      "short_coach_note": "Stop. The body does not run on call — only when iterated.",
+      "seniority": "senior-with-gaps",
+      "clarity": "clear"
+    },
+    {
+      "correctness": "partial",
+      "missing_point": "event loop",
+      "missing_all": [
+        "event loop"
+      ],
+      "short_coach_note": "Good. Add: event loop.",
+      "seniority": "senior-with-gaps",
+      "clarity": "clear"
+    }
+  ],
+  "issues": [],
+  "artifacts": {
+    "events": "D:\\_SATIN_AI\\Toastovac\\jarvis\\android\\toastovac-tv\\docs\\autonomous\\logs\\interview_fbb00d0afb.jsonl"
+  }
+}

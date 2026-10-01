@@ -1,0 +1,38 @@
+{
+  "report": "rational_framerate",
+  "date": "2026-09-30",
+  "status": "PASS",
+  "rationalFlow": {
+    "cast_scene": "fpsNumerator/fpsDenominator accepted",
+    "cast_host": "session_fraction() stores exact num/den; no float round-trip",
+    "engine_cli": "--fps N --fps-den D (verified 60000/1001 and 60/1)",
+    "oneVPL": "FrameRateExtN / FrameRateExtD",
+    "pacingClock": "deadline(n) = t0 + n*den/num in integer nanoseconds",
+    "sceneClock": "t = n*den/num (f64)",
+    "encoderPts": "n*90000*den/num (90kHz ticks, integer)",
+    "tzhlPts": "video_origin + n*den*1e6/num (integer microseconds)",
+    "status": "fpsNumerator/fpsDenominator/requestedFps=num-den/rateMode"
+  },
+  "verification": [
+    {"request": {"fpsNumerator": 60, "fpsDenominator": 1}, "engineCmdline": "--fps 60 --fps-den 1 --gop 60 --pace", "producedFps": 60.03},
+    {"request": {"fpsNumerator": 60000, "fpsDenominator": 1001}, "engineCmdline": "--fps 60000 --fps-den 1001 --gop 60 --pace", "producedFps": 59.97, "requestedFps": 59.94005994005994}
+  ],
+  "policy": {
+    "nativeHighRate": "60/1 if display exposes true 60; else 60000/1001",
+    "nativeNormal": "30/1",
+    "p24Media": "source timing",
+    "source594": "60000/1001",
+    "source600": "60/1 only if display true-60"
+  },
+  "rollbackProfile": {
+    "fpsNumerator": 60000,
+    "fpsDenominator": 1001,
+    "resolution": "3840x2160",
+    "transfer": "PQ",
+    "colorspace": "BT.2020",
+    "profile": "Main10",
+    "bsf": "hevc_metadata VUI rewrite (persistent)",
+    "flip": "vertical pre-flip",
+    "decoder": "c2.amlogic.hevc.decoder createCount=1"
+  }
+}

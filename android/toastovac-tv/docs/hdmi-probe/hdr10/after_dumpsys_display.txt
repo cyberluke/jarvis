@@ -1,0 +1,425 @@
+DISPLAY MANAGER (dumpsys display)
+  mSafeMode=false
+  mPendingTraversal=false
+  mViewports=[DisplayViewport{type=INTERNAL, valid=true, isActive=true, displayId=0, uniqueId='local:4633127902230889483', physicalPort=11, orientation=0, logicalFrame=Rect(0, 0 - 1920, 1080), physicalFrame=Rect(0, 0 - 3840, 2160), deviceWidth=3840, deviceHeight=2160}]
+  mDefaultDisplayDefaultColorMode=0
+  mWifiDisplayScanRequestCount=0
+  mStableDisplaySize=Point(3840, 2160)
+  mMinimumBrightnessCurve=[(0.0, 0.0), (2000.0, 50.0), (4000.0, 90.0)]
+
+  mHdrConversionMode=HdrConversionMode{ConversionMode=HDR_CONVERSION_PASSTHROUGH, PreferredHdrOutputType=HDR_TYPE_INVALID}
+
+Display States: size=1
+  Display Id=0
+  Display State=ON
+  Display Brightness=0.3976378
+  Display SdrBrightness=0.3976378
+
+Display Adapters: size=3
+  LocalDisplayAdapter
+  VirtualDisplayAdapter
+  OverlayDisplayAdapter
+    mCurrentOverlaySetting=
+    mOverlays: size=0
+
+Display Devices: size=1
+  DisplayDeviceInfo{"Integrovaná obrazovka": uniqueId="local:4633127902230889483", 3840 x 2160, modeId 3, renderFrameRate 59.94006, defaultModeId 3, supportedModes [{id=1, width=1920, height=1080, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=2, width=1920, height=1080, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=3, width=3840, height=2160, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=4, width=3840, height=2160, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=5, width=3840, height=2160, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=6, width=3840, height=2160, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=7, width=3840, height=2160, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=8, width=3840, height=2160, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=9, width=3840, height=2160, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=10, width=3840, height=2160, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=11, width=1920, height=1080, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=12, width=1920, height=1080, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=13, width=1920, height=1080, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=14, width=1920, height=1080, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=15, width=1920, height=1080, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=16, width=1920, height=1080, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=17, width=1280, height=720, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=18, width=1280, height=720, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=19, width=1280, height=720, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}], colorMode 0, supportedColorModes [0], hdrCapabilities HdrCapabilities{mSupportedHdrTypes=[2, 3, 4], mMaxLuminance=1000.0, mMaxAverageLuminance=1000.0, mMinLuminance=0.0}, isForceSdr false, allmSupported true, gameContentTypeSupported true, density 640, 68.687 x 68.58 dpi, appVsyncOff 2000000, presDeadline 13683333, touch INTERNAL, rotation 0, type INTERNAL, address {port=11, model=0x404c2d479b6c44}, deviceProductInfo DeviceProductInfo{name=SAMSUNG, manufacturerPnpId=SAM, productId=4002, modelYear=null, manufactureDate=ManufactureDate{week=1, year=2019}, connectionToSinkType=2}, state ON, committedState ON, frameRateOverride , brightnessMinimum 0.0, brightnessMaximum 1.0, brightnessDefault 0.39763778, hdrSdrRatio NaN, FLAG_ALLOWED_TO_BE_DEFAULT_DISPLAY, FLAG_ROTATES_WITH_CONTENT, FLAG_SECURE, FLAG_SUPPORTS_PROTECTED_BUFFERS, FLAG_TRUSTED, installOrientation 0, displayShape DisplayShape{ spec=-545313861 displayWidth=3840 displayHeight=2160 physicalPixelDisplaySizeRatio=1.0 rotation=0 offsetX=0 offsetY=0 scale=1.0}}
+    mAdapter=LocalDisplayAdapter
+    mUniqueId=local:4633127902230889483
+    mDisplayToken=android.os.BinderProxy@284270d
+    mCurrentLayerStack=0
+    mCurrentFlags=1
+    mCurrentOrientation=0
+    mCurrentLayerStackRect=Rect(0, 0 - 1920, 1080)
+    mCurrentDisplayRect=Rect(0, 0 - 3840, 2160)
+    mCurrentSurface=null
+    mPhysicalDisplayId=4633127902230889483
+    mDisplayModeSpecs={baseModeId=3 allowGroupSwitching=true primary=physical: (0.0 Infinity) render:  (0.0 60.0) appRequest=physical: (0.0 Infinity) render:  (0.0 Infinity)}
+    mDisplayModeSpecsInvalid=false
+    mActiveModeId=3
+    mActiveColorMode=0
+    mDefaultModeId=3
+    mUserPreferredModeId=-1
+    mState=ON
+    mCommittedState=ON
+    mBrightnessState=0.3976378
+    mBacklightAdapter=BacklightAdapter [useSurfaceControl=false (force_anyway? false), backlight=com.android.server.lights.LightsService$LightImpl@738c6c2]
+    mAllmSupported=true
+    mAllmRequested=false
+    mGameContentTypeSupported=true
+    mGameContentTypeRequested=false
+    mStaticDisplayInfo=StaticDisplayInfo{isInternal=true, density=2.0, secure=true, deviceProductInfo=DeviceProductInfo{name=SAMSUNG, manufacturerPnpId=SAM, productId=4002, modelYear=null, manufactureDate=ManufactureDate{week=1, year=2019}, connectionToSinkType=2}, installOrientation=0}
+    mSfDisplayModes=
+      DisplayMode{id=0, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=59.94006, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=13683333, supportedHdrTypes=[3, 2, 4], group=0}
+      DisplayMode{id=1, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=60.000004, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=13666666, supportedHdrTypes=[3, 2, 4], group=1}
+      DisplayMode{id=2, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=59.94006, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=13683333, supportedHdrTypes=[3, 2, 4], group=9}
+      DisplayMode{id=3, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=60.000004, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=13666666, supportedHdrTypes=[3, 2, 4], group=10}
+      DisplayMode{id=4, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=50.0, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=17000000, supportedHdrTypes=[3, 2, 4], group=11}
+      DisplayMode{id=5, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=29.97003, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=30366666, supportedHdrTypes=[3, 2, 4], group=12}
+      DisplayMode{id=6, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=30.000002, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=30333333, supportedHdrTypes=[3, 2, 4], group=13}
+      DisplayMode{id=7, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=25.0, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=37000000, supportedHdrTypes=[3, 2, 4], group=14}
+      DisplayMode{id=8, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=23.976025, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=38708332, supportedHdrTypes=[3, 2, 4], group=15}
+      DisplayMode{id=9, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=24.000002, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=38666666, supportedHdrTypes=[3, 2, 4], group=16}
+      DisplayMode{id=10, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=50.0, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=17000000, supportedHdrTypes=[3, 2, 4], group=19}
+      DisplayMode{id=11, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=29.97003, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=30366666, supportedHdrTypes=[3, 2, 4], group=21}
+      DisplayMode{id=12, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=30.000002, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=30333333, supportedHdrTypes=[3, 2, 4], group=22}
+      DisplayMode{id=13, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=25.0, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=37000000, supportedHdrTypes=[3, 2, 4], group=23}
+      DisplayMode{id=14, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=23.976025, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=38708332, supportedHdrTypes=[3, 2, 4], group=24}
+      DisplayMode{id=15, width=1920, height=1080, xDpi=34.343, yDpi=34.29, refreshRate=24.000002, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=38666666, supportedHdrTypes=[3, 2, 4], group=25}
+      DisplayMode{id=16, width=1280, height=720, xDpi=22.895, yDpi=22.86, refreshRate=59.94006, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=13683333, supportedHdrTypes=[3, 2, 4], group=32}
+      DisplayMode{id=17, width=1280, height=720, xDpi=22.895, yDpi=22.86, refreshRate=60.000004, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=13666666, supportedHdrTypes=[3, 2, 4], group=33}
+      DisplayMode{id=18, width=1280, height=720, xDpi=22.895, yDpi=22.86, refreshRate=50.0, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=17000000, supportedHdrTypes=[3, 2, 4], group=34}
+    mActiveSfDisplayMode=DisplayMode{id=2, width=3840, height=2160, xDpi=68.687, yDpi=68.58, refreshRate=59.94006, appVsyncOffsetNanos=2000000, presentationDeadlineNanos=13683333, supportedHdrTypes=[3, 2, 4], group=9}
+    mActiveRenderFrameRate=59.94006
+    mSupportedModes=
+      DisplayModeRecord{mMode={id=1, width=1920, height=1080, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=2, width=1920, height=1080, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=3, width=3840, height=2160, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=4, width=3840, height=2160, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=5, width=3840, height=2160, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=6, width=3840, height=2160, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=7, width=3840, height=2160, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=8, width=3840, height=2160, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=9, width=3840, height=2160, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=10, width=3840, height=2160, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=11, width=1920, height=1080, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=12, width=1920, height=1080, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=13, width=1920, height=1080, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=14, width=1920, height=1080, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=15, width=1920, height=1080, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=16, width=1920, height=1080, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=17, width=1280, height=720, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=18, width=1280, height=720, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+      DisplayModeRecord{mMode={id=19, width=1280, height=720, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}}
+    mSupportedColorModes=[0]
+    mDisplayDeviceConfig=DisplayDeviceConfig{mLoadedFrom=<config.xml>, mBacklight=null, mNits=null, mRawBacklight=null, mRawNits=null, mInterpolationType=0, mBrightness=null, mBrightnessToBacklightSpline=MonotoneCubicSpline{[(0.0, 0.0: 1.0), (1.0, 1.0: 1.0)]}, mBacklightToBrightnessSpline=MonotoneCubicSpline{[(0.0, 0.0: 1.0), (1.0, 1.0: 1.0)]}, mNitsToBacklightSpline=null, mBacklightMinimum=0.035433073, mBacklightMaximum=1.0, mBrightnessDefault=0.39763778, mQuirks=null, isHbmEnabled=false, mHbmData=null, mSdrToHdrRatioSpline=null, mThermalBrightnessThrottlingDataMapByThrottlingId={}
+    , mBrightnessRampFastDecrease=0.70472443, mBrightnessRampFastIncrease=0.70472443, mBrightnessRampSlowDecrease=0.23228346, mBrightnessRampSlowIncrease=0.23228346, mBrightnessRampDecreaseMaxMillis=0, mBrightnessRampIncreaseMaxMillis=0
+    , mAmbientHorizonLong=10000, mAmbientHorizonShort=2000
+    , mScreenDarkeningMinThreshold=0.0, mScreenDarkeningMinThresholdIdle=0.0, mScreenBrighteningMinThreshold=0.0, mScreenBrighteningMinThresholdIdle=0.0, mAmbientLuxDarkeningMinThreshold=0.0, mAmbientLuxDarkeningMinThresholdIdle=0.0, mAmbientLuxBrighteningMinThreshold=0.0, mAmbientLuxBrighteningMinThresholdIdle=0.0
+    , mScreenBrighteningLevels=[0.0], mScreenBrighteningPercentages=[10.0], mScreenDarkeningLevels=[0.0], mScreenDarkeningPercentages=[20.0], mAmbientBrighteningLevels=[0.0], mAmbientBrighteningPercentages=[10.0], mAmbientDarkeningLevels=[0.0], mAmbientDarkeningPercentages=[20.0]
+    , mAmbientBrighteningLevelsIdle=[0.0], mAmbientBrighteningPercentagesIdle=[10.0], mAmbientDarkeningLevelsIdle=[0.0], mAmbientDarkeningPercentagesIdle=[20.0], mScreenBrighteningLevelsIdle=[0.0], mScreenBrighteningPercentagesIdle=[10.0], mScreenDarkeningLevelsIdle=[0.0], mScreenDarkeningPercentagesIdle=[20.0]
+    , mAmbientLightSensor=Sensor{type: , name: , refreshRateRange: [0.0, Infinity]} , mScreenOffBrightnessSensor=Sensor{type: null, name: null, refreshRateRange: [0.0, Infinity]} , mProximitySensor=Sensor{type: null, name: null, refreshRateRange: [0.0, Infinity]} , mRefreshRateLimitations= [], mDensityMapping= DensityMapping{mDensityMappingEntries=[DensityMappingEntry{squaredDiagonal=748800, density=120}, DensityMappingEntry{squaredDiagonal=2156800, density=213}, DensityMappingEntry{squaredDiagonal=4852800, density=320}, DensityMappingEntry{squaredDiagonal=19411200, density=640}]}, mAutoBrightnessBrighteningLightDebounce= -1, mAutoBrightnessDarkeningLightDebounce= -1, mBrightnessLevelsLux= [0.0], mBrightnessLevelsNits= [], mDdcAutoBrightnessAvailable= true, mAutoBrightnessAvailable= false
+    , mDefaultLowBlockingZoneRefreshRate= 0, mDefaultHighBlockingZoneRefreshRate= 0, mDefaultPeakRefreshRate= 0, mDefaultRefreshRate= 60, mRefreshRateZoneProfiles= {}, mDefaultRefreshRateInHbmHdr= 0, mDefaultRefreshRateInHbmSunlight= 0, mRefreshRateThrottlingMap= {}
+    , mLowDisplayBrightnessThresholds= [], mLowAmbientBrightnessThresholds= [], mHighDisplayBrightnessThresholds= [], mHighAmbientBrightnessThresholds= []
+    , mScreenOffBrightnessSensorValueToLux=null
+    , mUsiVersion= null}
+
+LogicalDisplayMapper:
+  mSingleDisplayDemoMode=false
+  mCurrentLayout=[{dispId: 0(ON), displayGroupName: , addr: {port=11, model=0x404c2d479b6c44}, mThermalBrightnessThrottlingMapId: null, mRefreshRateZoneId: null, mLeadDisplayId: -1, mThermalRefreshRateThrottlingMapId: null}]
+  mDeviceStatesOnWhichToWakeUp={}
+  mDeviceStatesOnWhichToSleep={}
+  mInteractive=true
+  mBootCompleted=true
+  
+  mDeviceState=0
+  mPendingDeviceState=-1
+  mDeviceStateToBeAppliedAfterBoot=-1
+  
+  Logical Displays: size=1
+  Display 0:
+    mDisplayId=0
+    mIsEnabled=true
+    mIsInTransition=false
+    mLayerStack=0
+    mPosition=-1
+    mHasContent=true
+    mDesiredDisplayModeSpecs={baseModeId=3 allowGroupSwitching=true primary=physical: (0.0 Infinity) render:  (0.0 60.0) appRequest=physical: (0.0 Infinity) render:  (0.0 Infinity)}
+    mRequestedColorMode=0
+    mDisplayOffset=(0, 0)
+    mDisplayScalingDisabled=false
+    mPrimaryDisplayDevice=Integrovaná obrazovka
+    mBaseDisplayInfo=DisplayInfo{"Integrovaná obrazovka", displayId 0, displayGroupId 0, FLAG_SECURE, FLAG_SUPPORTS_PROTECTED_BUFFERS, FLAG_TRUSTED, real 3840 x 2160, largest app 3840 x 2160, smallest app 3840 x 2160, appVsyncOff 2000000, presDeadline 13683333, mode 359.94006, defaultMode 3, modes [{id=1, width=1920, height=1080, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=2, width=1920, height=1080, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=3, width=3840, height=2160, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=4, width=3840, height=2160, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=5, width=3840, height=2160, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=6, width=3840, height=2160, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=7, width=3840, height=2160, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=8, width=3840, height=2160, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=9, width=3840, height=2160, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=10, width=3840, height=2160, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=11, width=1920, height=1080, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=12, width=1920, height=1080, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=13, width=1920, height=1080, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=14, width=1920, height=1080, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=15, width=1920, height=1080, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=16, width=1920, height=1080, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=17, width=1280, height=720, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=18, width=1280, height=720, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=19, width=1280, height=720, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}], hdrCapabilities HdrCapabilities{mSupportedHdrTypes=[2, 3, 4], mMaxLuminance=1000.0, mMaxAverageLuminance=1000.0, mMinLuminance=0.0}, isForceSdr false, userDisabledHdrTypes [], minimalPostProcessingSupported true, rotation 0, state ON, committedState ON, type INTERNAL, uniqueId "local:4633127902230889483", app 3840 x 2160, density 640 (68.687 x 68.58) dpi, layerStack 0, colorMode 0, supportedColorModes [0], address {port=11, model=0x404c2d479b6c44}, deviceProductInfo DeviceProductInfo{name=SAMSUNG, manufacturerPnpId=SAM, productId=4002, modelYear=null, manufactureDate=ManufactureDate{week=1, year=2019}, connectionToSinkType=2}, removeMode 0, refreshRateOverride 0.0, brightnessMinimum 0.0, brightnessMaximum 1.0, brightnessDefault 0.39763778, installOrientation ROTATION_0, layoutLimitedRefreshRate null, hdrSdrRatio not_available, thermalRefreshRateThrottling {}, thermalBrightnessThrottlingDataId default}
+    mOverrideDisplayInfo=DisplayInfo{"Integrovaná obrazovka", displayId 0, displayGroupId 0, FLAG_SECURE, FLAG_SUPPORTS_PROTECTED_BUFFERS, FLAG_TRUSTED, real 1920 x 1080, largest app 1920 x 1920, smallest app 1080 x 1080, appVsyncOff 2000000, presDeadline 13683333, mode 359.94006, defaultMode 3, modes [{id=1, width=1920, height=1080, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=2, width=1920, height=1080, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=3, width=3840, height=2160, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=4, width=3840, height=2160, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=5, width=3840, height=2160, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=6, width=3840, height=2160, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=7, width=3840, height=2160, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=8, width=3840, height=2160, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=9, width=3840, height=2160, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=10, width=3840, height=2160, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=11, width=1920, height=1080, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=12, width=1920, height=1080, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=13, width=1920, height=1080, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=14, width=1920, height=1080, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=15, width=1920, height=1080, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=16, width=1920, height=1080, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=17, width=1280, height=720, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=18, width=1280, height=720, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=19, width=1280, height=720, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}], hdrCapabilities HdrCapabilities{mSupportedHdrTypes=[2, 3, 4], mMaxLuminance=1000.0, mMaxAverageLuminance=1000.0, mMinLuminance=0.0}, isForceSdr false, userDisabledHdrTypes [], minimalPostProcessingSupported true, rotation 0, state ON, committedState ON, type INTERNAL, uniqueId "local:4633127902230889483", app 1920 x 1080, density 320 (34.3435 x 34.29) dpi, layerStack 0, colorMode 0, supportedColorModes [0], address {port=11, model=0x404c2d479b6c44}, deviceProductInfo DeviceProductInfo{name=SAMSUNG, manufacturerPnpId=SAM, productId=4002, modelYear=null, manufactureDate=ManufactureDate{week=1, year=2019}, connectionToSinkType=2}, removeMode 0, refreshRateOverride 59.94006, brightnessMinimum 0.0, brightnessMaximum 1.0, brightnessDefault 0.39763778, installOrientation ROTATION_0, layoutLimitedRefreshRate null, hdrSdrRatio not_available, thermalRefreshRateThrottling {}, thermalBrightnessThrottlingDataId default}
+    mRequestedMinimalPostProcessing=false
+    mFrameRateOverrides=[]
+    mPendingFrameRateOverrideUids={}
+    mDisplayGroupName=
+    mThermalBrightnessThrottlingDataId=default
+    mLeadDisplayId=-1
+    mLayoutLimitedRefreshRate=null
+    mThermalRefreshRateThrottling={}
+  
+  DeviceStateToLayoutMap:
+    Registered Layouts:
+    state(-1): [{dispId: 0(ON), displayGroupName: , addr: {port=11, model=0x404c2d479b6c44}, mThermalBrightnessThrottlingMapId: null, mRefreshRateZoneId: null, mLeadDisplayId: -1, mThermalRefreshRateThrottlingMapId: null}]
+
+Callbacks: size=15
+  0: mPid=718, mWifiDisplayScanRequested=false
+  1: mPid=1014, mWifiDisplayScanRequested=false
+  2: mPid=1299, mWifiDisplayScanRequested=false
+  3: mPid=1367, mWifiDisplayScanRequested=false
+  4: mPid=1415, mWifiDisplayScanRequested=false
+  5: mPid=1510, mWifiDisplayScanRequested=false
+  6: mPid=1608, mWifiDisplayScanRequested=false
+  7: mPid=1742, mWifiDisplayScanRequested=false
+  8: mPid=1854, mWifiDisplayScanRequested=false
+  9: mPid=1906, mWifiDisplayScanRequested=false
+  10: mPid=2045, mWifiDisplayScanRequested=false
+  11: mPid=2169, mWifiDisplayScanRequested=false
+  12: mPid=2330, mWifiDisplayScanRequested=false
+  13: mPid=2802, mWifiDisplayScanRequested=false
+  14: mPid=2906, mWifiDisplayScanRequested=false
+
+Display Power Controllers: size=1
+
+Display Power Controller:
+  mDisplayId=0
+  mLeadDisplayId=-1
+  mLightSensor=null
+  mDisplayBrightnessFollowers={}
+
+Display Power Controller Locked State:
+  mDisplayReadyLocked=true
+  mPendingRequestLocked=policy=BRIGHT, useProximitySensor=false, screenBrightnessOverride=NaN, screenAutoBrightnessAdjustmentOverride=NaN, screenLowPowerBrightnessFactor=1.0, blockScreenOn=false, lowPowerMode=false, boostScreenBrightness=false, dozeScreenBrightness=NaN, dozeScreenState=UNKNOWN
+  mPendingRequestChangedLocked=false
+  mPendingUpdatePowerStateLocked=false
+
+Display Power Controller Configuration:
+  mScreenBrightnessDozeConfig=0.0
+  mScreenBrightnessDimConfig=0.05
+  mUseSoftwareAutoBrightnessConfig=false
+  mSkipScreenOnBrightnessRamp=false
+  mColorFadeFadesConfig=true
+  mColorFadeEnabled=true
+  mIsDisplayInternal=true
+  mCachedBrightnessInfo.brightness=0.39763778
+  mCachedBrightnessInfo.adjustedBrightness=0.39763778
+  mCachedBrightnessInfo.brightnessMin=0.0
+  mCachedBrightnessInfo.brightnessMax=1.0
+  mCachedBrightnessInfo.hbmMode=0
+  mCachedBrightnessInfo.hbmTransitionPoint=Infinity
+  mCachedBrightnessInfo.brightnessMaxReason =0
+  mDisplayBlanksAfterDozeConfig=false
+  mBrightnessBucketsInDozeConfig=false
+
+Display Power Controller Thread State:
+  mPowerRequest=policy=BRIGHT, useProximitySensor=false, screenBrightnessOverride=NaN, screenAutoBrightnessAdjustmentOverride=NaN, screenLowPowerBrightnessFactor=1.0, blockScreenOn=false, lowPowerMode=false, boostScreenBrightness=false, dozeScreenBrightness=NaN, dozeScreenState=UNKNOWN
+  mBrightnessReason=manual
+  mAppliedDimming=false
+  mAppliedLowPower=false
+  mAppliedThrottling=false
+  mDozing=false
+  mSkipRampState=RAMP_STATE_SKIP_NONE
+  mScreenOnBlockStartRealTime=0
+  mScreenOffBlockStartRealTime=0
+  mPendingScreenOnUnblocker=null
+  mPendingScreenOffUnblocker=null
+  mPendingScreenOff=false
+  mReportedToPolicy=REPORTED_TO_POLICY_SCREEN_ON
+  mIsRbcActive=false
+AutomaticBrightnessStrategy:
+  mDisplayId=0
+  mAutoBrightnessAdjustment=0.0
+  mPendingAutoBrightnessAdjustment=NaN
+  mTemporaryAutoBrightnessAdjustment=NaN
+  mShouldResetShortTermModel=false
+  mAppliedAutoBrightness=false
+  mAutoBrightnessAdjustmentChanged=false
+  mAppliedTemporaryAutoBrightnessAdjustment=false
+  mUseAutoBrightness=false
+  mWasShortTermModelActive=false
+  mAutoBrightnessAdjustmentReasonsFlags=0
+  mScreenBrightnessRampAnimator.isAnimating()=false
+  mColorFadeOnAnimator.isStarted()=false
+  mColorFadeOffAnimator.isStarted()=false
+
+Display Power State:
+  mStopped=false
+  mScreenState=ON
+  mScreenBrightness=0.3976378
+  mSdrScreenBrightness=0.3976378
+  mScreenReady=true
+  mScreenUpdatePending=false
+  mColorFadePrepared=false
+  mColorFadeLevel=1.0
+  mColorFadeReady=true
+  mColorFadeDrawPending=false
+
+Photonic Modulator State:
+  mPendingState=ON
+  mPendingBacklight=0.3976378
+  mPendingSdrBacklight=0.3976378
+  mActualState=ON
+  mActualBacklight=0.3976378
+  mActualSdrBacklight=0.3976378
+  mStateChangeInProgress=false
+  mBacklightChangeInProgress=false
+
+Color Fade State:
+  mPrepared=false
+  mMode=0
+  mDisplayLayerStack=0
+  mDisplayWidth=0
+  mDisplayHeight=0
+  mSurfaceVisible=false
+  mSurfaceAlpha=0.0
+No Reduce Bright Colors Adjustments
+HighBrightnessModeController:
+  mBrightness=0.0
+  mUnthrottledBrightness=0.0
+  mThrottlingReason=none
+  mCurrentMin=0.0
+  mCurrentMax=1.0
+  mHbmMode=off
+  mHbmStatsState=HBM_OFF
+  mHbmData=null
+  mAmbientLux=0.0 (old/invalid)
+  mIsInAllowedAmbientRange=false
+  mIsAutoBrightnessEnabled=false
+  mIsAutoBrightnessOffByState=false
+  mIsHdrLayerPresent=false
+  mBrightnessMin=0.0
+  mBrightnessMax=1.0
+  remainingTime=0
+  mIsTimeAvailable= false
+  mRunningStartTimeMillis=-1 (82267 ms ago)
+  mIsBlockedByLowPowerMode=false
+  width*height=3840*2160
+  mEvents=
+BrightnessThrottler:
+  mThermalBrightnessThrottlingDataId=default
+  mThermalThrottlingData=null
+  mUniqueDisplayId=local:4633127902230889483
+  mThrottlingStatus=-1
+  mBrightnessCap=1.0
+  mBrightnessMaxReason=none
+  mDdcThermalThrottlingDataMap={}
+  mThermalBrightnessThrottlingDataOverride={}
+  mThermalBrightnessThrottlingDataString=null
+  SkinThermalStatusObserver:
+    mStarted: false
+    ThermalService not available
+
+
+WakelockController State:
+  mDisplayId=0
+  mUnfinishedBusiness=false
+  mOnStateChangePending=false
+  mOnProximityPositiveMessages=false
+  mOnProximityNegativeMessages=false
+
+
+DisplayBrightnessController:
+  mDisplayId=: 0
+  mScreenBrightnessDefault=0.39763778
+  mPersistBrightnessNitsForDefaultDisplay=false
+  mPendingScreenBrightness=NaN
+  mCurrentScreenBrightness=0.39763778
+  mLastUserSetScreenBrightness=NaN
+  Last selected DisplayBrightnessStrategy= InvalidBrightnessStrategy
+
+DisplayBrightnessStrategySelector:
+  mDisplayId= 0
+  mOldBrightnessStrategyName= InvalidBrightnessStrategy
+  mAllowAutoBrightnessWhileDozingConfig= false
+TemporaryBrightnessStrategy:
+  mTemporaryScreenBrightness:NaN
+
+
+DisplayStateController:
+-----------------------
+  mShouldSkipScreenOffTransition=false
+  mPerformScreenOffTransition=false
+
+DisplayPowerProximityStateController:
+  mPendingWaitForNegativeProximityLocked=false
+  mDisplayId=0
+  mWaitingForNegativeProximity=false
+  mIgnoreProximityUntilChanged=false
+  mProximitySensor=null
+  mProximitySensorEnabled=false
+  mProximityThreshold=0.0
+  mProximity=Unknown
+  mPendingProximity=Unknown
+  mPendingProximityDebounceTime=-1 (82268 ms ago)
+  mScreenOffBecauseOfProximity=false
+  mSkipRampBecauseOfProximityChangeToNegative=false
+
+PersistentDataStore
+  mLoaded=true
+  mDirty=false
+  RememberedWifiDisplays:
+  DisplayStates:
+    0: local:4633127902230889483
+      ColorMode=0
+      BrightnessValue=NaN
+      DisplayBrightnessConfigurations: 
+      Resolution=3840 2160
+      RefreshRate=60.0
+  StableDeviceValues:
+      StableDisplayWidth=3840
+      StableDisplayHeight=2160
+  GlobalBrightnessConfigurations:
+  mBrightnessNitsForDefaultDisplay=-1.0
+
+Display Window Policy Controllers: size=0
+
+BrightnessTracker state:
+  mStarted=false
+  mLightSensor=null
+  mLastBatteryLevel=NaN
+  mLastBrightness=-1.0
+  mEventsDirty=false
+  mEvents.size=0
+  mWriteBrightnessTrackerStateScheduled=false
+  mSensorRegistered=false
+  mColorSamplingEnabled=false
+  mNoFramesToSample=0
+  mFrameRate=0.0
+
+DisplayModeDirector
+  mSupportedModesByDisplay:
+    0 -> [{id=1, width=1920, height=1080, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=2, width=1920, height=1080, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=3, width=3840, height=2160, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=4, width=3840, height=2160, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=5, width=3840, height=2160, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=6, width=3840, height=2160, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=7, width=3840, height=2160, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=8, width=3840, height=2160, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=9, width=3840, height=2160, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=10, width=3840, height=2160, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=11, width=1920, height=1080, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=12, width=1920, height=1080, fps=29.97003, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=13, width=1920, height=1080, fps=30.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=14, width=1920, height=1080, fps=25.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=15, width=1920, height=1080, fps=23.976025, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=16, width=1920, height=1080, fps=24.000002, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=17, width=1280, height=720, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=18, width=1280, height=720, fps=60.000004, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}, {id=19, width=1280, height=720, fps=50.0, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}]
+  mDefaultModeByDisplay:
+    0 -> {id=3, width=3840, height=2160, fps=59.94006, alternativeRefreshRates=[], supportedHdrTypes=[2, 3, 4]}
+  mModeSwitchingType: SWITCHING_TYPE_ACROSS_AND_WITHIN_GROUPS
+  mAlwaysRespectAppRequest: false
+  SettingsObserver
+    mDefaultRefreshRate: 60.0
+    mDefaultPeakRefreshRate: 0.0
+  AppRequestObserver
+    mAppRequestedModeByDisplay:
+    mAppPreferredRefreshRateRangeByDisplay:
+  BrightnessObserver
+    mAmbientLux: -1.0
+    mBrightness: 102
+    mDefaultDisplayState: 0
+    mLowPowerModeEnabled: false
+    mRefreshRateChangeable: false
+    mShouldObserveDisplayLowChange: false
+    mShouldObserveAmbientLowChange: false
+    mRefreshRateInLowZone: 0
+    mShouldObserveDisplayHighChange: false
+    mShouldObserveAmbientHighChange: false
+    mRefreshRateInHighZone: 0
+    mRegisteredLightSensor: null
+    mLightSensor: null
+    mLightSensorName: 
+    mLightSensorType: 
+    mLastSensorData: 0.0
+    mTimestamp: 1970-01-01 01:00:00.000
+  UdfpsObserver
+    mUdfpsRefreshRateEnabled: 
+    mAuthenticationPossible: 
+   HbmObserver
+     mHbmMode: {}
+     mHbmActive: {}
+     mRefreshRateInHbmSunlight: 0
+     mRefreshRateInHbmHdr: 0
+  SkinThermalStatusObserver:
+    mStatus: -1
+    mThermalThrottlingByDisplay: {0={}}
+  mVotesByDisplay:
+    -1:
+      PRIORITY_USER_SETTING_MIN_RENDER_FRAME_RATE -> Vote: {width: -1, height: -1, refreshRateRanges: physical: (0.0 Infinity) render:  (0.0 Infinity), disableRefreshRateSwitching: false, appRequestBaseModeRefreshRate: 0.0}
+      PRIORITY_DEFAULT_REFRESH_RATE -> Vote: {width: -1, height: -1, refreshRateRanges: physical: (0.0 Infinity) render:  (0.0 60.0), disableRefreshRateSwitching: false, appRequestBaseModeRefreshRate: 0.0}
+  SensorObserver
+    mIsProxActive=false
+    mDozeStateByDisplay:
+      0 -> false
+BrightnessSynchronizer
+  mLatestIntBrightness=102
+  mLatestFloatBrightness=0.39763778
+  mCurrentUpdate=null
+  mPendingUpdate=null

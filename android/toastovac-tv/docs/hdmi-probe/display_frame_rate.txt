@@ -1,0 +1,2 @@
+=== frame_rate ===
+cat: /sys/class/display/frame_rate: Permission denied

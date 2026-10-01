@@ -116,6 +116,95 @@ def _endpoint_line(tel: dict) -> str:
     return f"{cap}  {ren}"
 
 
+def native_destroy() -> None:
+    """Tear down the process engine so a later ``native_create`` can retarget."""
+    global _ENGINE, _ENGINE_TELEMETRY, _STATUS, _LANE_BY_STREAM
+    for key in list(_LANE_BY_STREAM):
+        try:
+            lane_destroy(key)
+        except Exception:
+            _LANE_BY_STREAM.pop(key, None)
+    if _ENGINE:
+        try:
+            _na.engine_destroy(_ENGINE)
+        except Exception as exc:
+            debug_log(f"native: engine_destroy: {exc}", "voice")
+        _ENGINE = None
+    _ENGINE_TELEMETRY = {}
+    _STATUS = -1
+
+
+def resolve_interview_headset(cfg) -> dict:
+    """Configured USB headset pair. No default-speaker fallback.
+
+    Precedence:
+      1. both ``interview_capture_endpoint_id`` + ``interview_render_endpoint_id``
+      2. ``interview_headset_match`` family (default Plantronics)
+    """
+    cap_id = str(getattr(cfg, "interview_capture_endpoint_id", "") or "").strip()
+    ren_id = str(getattr(cfg, "interview_render_endpoint_id", "") or "").strip()
+    if cap_id and ren_id:
+        names = {}
+        try:
+            for e in _na.enumerate_endpoints():
+                names[str(e.get("id") or "")] = str(e.get("friendly_name") or "")
+        except Exception:
+            names = {}
+        return {
+            "match": "explicit",
+            "capture_endpoint_id": cap_id,
+            "capture_name": names.get(cap_id, cap_id),
+            "render_endpoint_id": ren_id,
+            "render_name": names.get(ren_id, ren_id),
+        }
+    match = str(getattr(cfg, "interview_headset_match", "") or "Plantronics").strip()
+    return _na.resolve_headset_pair(match)
+
+
+def ensure_interview_headset(cfg) -> dict:
+    """Pin capture + loopback to the interview headset, recreating the engine.
+
+    Meet/Teams ignore the Windows multimedia default speaker. Interview
+    Coach hears the remote party only if we loop back the same USB
+    headset the call is using.
+    """
+    pair = resolve_interview_headset(cfg)
+    tel = engine_telemetry() if _ENGINE else {}
+    same = (
+        str(tel.get("capture_endpoint_id") or "") == pair["capture_endpoint_id"]
+        and str(tel.get("render_endpoint_id") or "") == pair["render_endpoint_id"]
+    )
+    if same and _ENGINE:
+        debug_log(
+            f"interview headset already active: "
+            f"mic='{pair['capture_name']}' ear='{pair['render_name']}'",
+            "everywhere",
+        )
+        return {**pair, "recreated": False, "engine": _ENGINE}
+    # Temporarily stamp the cfg the engine reads, then restore.
+    old_cap = getattr(cfg, "voice_capture_endpoint_id", "")
+    old_ren = getattr(cfg, "voice_render_endpoint_id", "")
+    try:
+        cfg.voice_capture_endpoint_id = pair["capture_endpoint_id"]
+        cfg.voice_render_endpoint_id = pair["render_endpoint_id"]
+        native_destroy()
+        st = native_create(cfg)
+    finally:
+        cfg.voice_capture_endpoint_id = old_cap
+        cfg.voice_render_endpoint_id = old_ren
+    if st != NATIVE_OK or not _ENGINE:
+        raise RuntimeError(
+            f"interview headset engine failed status={st} "
+            f"mic='{pair['capture_name']}' ear='{pair['render_name']}'"
+        )
+    debug_log(
+        f"interview headset: mic='{pair['capture_name']}' "
+        f"ear='{pair['render_name']}' (Meet/Teams loopback)",
+        "everywhere",
+    )
+    return {**pair, "recreated": True, "engine": _ENGINE}
+
+
 def native_create(cfg) -> int:
     """Create the configured engine/lane set; returns JARVIS_AE status."""
     global _ENGINE, _ENGINE_TELEMETRY, _STATUS
@@ -434,6 +523,22 @@ def pop_clean(lane_key: tuple):
     if handle is None:
         return 0, None
     return _na.lane_pop_clean(handle)
+
+
+def pop_local_clean(max_frames: int = 48):
+    """Drain cleaned 16 kHz frames from the local WASAPI lane (v2)."""
+    import numpy as np
+    chunks = []
+    rate = 16000
+    for _ in range(max(1, int(max_frames))):
+        r, arr = pop_clean(("local", 0, 0))
+        if arr is None or len(arr) == 0:
+            break
+        rate = int(r or 16000)
+        chunks.append(arr)
+    if not chunks:
+        return rate, None
+    return rate, np.concatenate(chunks)
 
 
 def lane_reset(lane_key: tuple) -> int:

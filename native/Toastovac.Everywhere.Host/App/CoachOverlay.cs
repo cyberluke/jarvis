@@ -147,15 +147,22 @@ public static class CoachOverlay
         if (_pipe is null) return;
         var lang = (_langCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "en";
         var domain = (_domainCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
-        var reply = _pipe.RoundTrip(BuildCmd("start",
-            ("answer_language", lang), ("domain_hint", domain)));
-        if (reply is not null
-            && reply.Value.TryGetProperty("kind", out var k)
-            && k.GetString() == "coach_started")
+        // RoundTrip can block for seconds on a slow broker — never on the
+        // UI thread (a frozen UI thread renders black and unclosable).
+        Task.Run(() =>
         {
-            _running = true;
-            _pollTimer = new System.Threading.Timer(_ => Poll(), null, 300, 300);
-        }
+            var reply = _pipe.RoundTrip(BuildCmd("start",
+                ("answer_language", lang), ("domain_hint", domain)));
+            if (reply is not null
+                && reply.Value.TryGetProperty("kind", out var k)
+                && k.GetString() == "coach_started"
+                && _window is not null)
+            {
+                _running = true;
+                _pollTimer = new System.Threading.Timer(_ => Poll(),
+                    null, 300, 300);
+            }
+        });
     }
 
     private static void Stop()
@@ -163,22 +170,35 @@ public static class CoachOverlay
         _running = false;
         _pollTimer?.Dispose();
         _pollTimer = null;
-        _pipe?.RoundTrip(BuildCmd("stop"));
+        var pipe = _pipe;
+        if (pipe is null) return;
+        try
+        {
+            Task.Run(() => pipe.RoundTrip(BuildCmd("stop")));
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private static void Summarize()
     {
         if (_pipe is null) return;
-        var reply = _pipe.RoundTrip(BuildCmd("summarize"));
-        if (reply is null) return;
-        if (reply.Value.TryGetProperty("summary", out var s))
+        var dq = _dq;
+        Task.Run(() =>
         {
-            var text = s.GetString() ?? "";
-            if (text.Length > 0)
+            var reply = _pipe.RoundTrip(BuildCmd("summarize"));
+            if (reply is null) return;
+            if (reply.Value.TryGetProperty("summary", out var s))
             {
-                AppendBlock("📝 Meeting summary", text, isHint: true);
+                var text = s.GetString() ?? "";
+                if (text.Length > 0)
+                {
+                    dq?.TryEnqueue(() =>
+                        AppendBlock("📝 Meeting summary", text, isHint: true));
+                }
             }
-        }
+        });
     }
 
     private static void Poll()
@@ -248,7 +268,7 @@ public static class CoachOverlay
         });
     }
 
-    private static void Close()
+    internal static void Close()
     {
         Stop();
         var win = _window;

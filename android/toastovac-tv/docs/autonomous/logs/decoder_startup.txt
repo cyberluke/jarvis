@@ -1,0 +1,20 @@
+--------- beginning of main
+09-29 01:17:59.267 E/TOASTOVAC-DEC( 8299): CREATED pid=8299 t=3678089 owner=DASHBOARD count=1
+09-29 01:17:59.342 I/TOASTOVAC-LIVE( 8299): AU 0 flags=0x04 bytes=874 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.405 I/TOASTOVAC-LIVE( 8299): AU 1 flags=0x04 bytes=836 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.472 I/TOASTOVAC-LIVE( 8299): AU 2 flags=0x04 bytes=1361 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.543 I/TOASTOVAC-LIVE( 8299): AU 3 flags=0x04 bytes=835 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.604 I/TOASTOVAC-LIVE( 8299): AU 4 flags=0x04 bytes=795 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.671 I/TOASTOVAC-LIVE( 8299): AU 5 flags=0x04 bytes=932 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.744 I/TOASTOVAC-LIVE( 8299): AU 6 flags=0x04 bytes=561 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.809 I/TOASTOVAC-LIVE( 8299): AU 7 flags=0x04 bytes=800 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.877 I/TOASTOVAC-LIVE( 8299): AU 8 flags=0x04 bytes=727 nals=[AUD,SEI,V1,V1]
+09-29 01:17:59.940 I/TOASTOVAC-LIVE( 8299): AU 9 flags=0x04 bytes=1495 nals=[AUD,SEI,V1,V1]
+09-29 01:18:00.010 I/TOASTOVAC-LIVE( 8299): AU 10 flags=0x01 bytes=13560 nals=[VPS,SPS,PPS,VPS,SPS,PPS,VPS,SPS,PPS,VPS]
+09-29 01:18:00.022 I/TOASTOVAC-LIVE( 8299): AU 11 flags=0x06 bytes=34689 nals=[AUD,SEI,IDR,IDR]
+09-29 01:18:00.023 I/TOASTOVAC-DEC( 8299): FIRST_IDR bytes=34689 flags=0x6
+09-29 01:18:00.071 I/TOASTOVAC-LIVE( 8299): AU 12 flags=0x04 bytes=1117 nals=[AUD,SEI,V1,V1]
+09-29 01:18:00.095 E/TOASTOVAC-DEC( 8299): out fmt {crop-right=3839, sar-width=1, color-format=2130708361, mime=video/raw, hdr-static-info=java.nio.HeapByteBuffer[pos=0 lim=25 cap=25], color-standard=6, color-transfer=6, sar-height=1, crop-bottom=2159, output.hdr-dynamic-info.data=java.nio.HeapByteBuffer[pos=0 lim=0 cap=0], crop-left=0, width=3840, color-range=2, crop-top=0, rotation-degrees=0, frame-rate=30, output.hdr-dynamic-info.type=0, height=2160}
+09-29 01:18:00.137 I/TOASTOVAC-LIVE( 8299): AU 13 flags=0x04 bytes=965 nals=[AUD,SEI,V1,V1]
+09-29 01:18:00.204 I/TOASTOVAC-LIVE( 8299): AU 14 flags=0x04 bytes=1491 nals=[AUD,SEI,V1,V1]
+09-29 01:18:00.273 I/TOASTOVAC-LIVE( 8299): AU 15 flags=0x04 bytes=812 nals=[AUD,SEI,V1,V1]

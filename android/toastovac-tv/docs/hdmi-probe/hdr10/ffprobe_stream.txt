@@ -1,0 +1,11 @@
+codec_name=hevc
+profile=Main 10
+width=3840
+height=2160
+pix_fmt=yuv420p10le
+color_range=tv
+color_space=bt2020nc
+color_transfer=smpte2084
+color_primaries=bt2020
+r_frame_rate=60/1
+duration=15.000000

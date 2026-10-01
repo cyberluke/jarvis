@@ -1,0 +1,18 @@
+{
+  "scenario": "desktop_capture_upgrade",
+  "status": "partial",
+  "ffmpeg_devices": {
+    "gdigrab": true,
+    "dshow": true,
+    "ddagrab": false,
+    "lavfi": true
+  },
+  "production_capture": "gdigrab",
+  "reason": "ddagrab not in this ffmpeg build; no in-repo WGC C#/C++ capture",
+  "dynamic_range": "SDR 1920x1080 primary (honest)",
+  "output": "letterbox 3840x2160 P010 hevc_qsv",
+  "issues": [
+    "Windows Graphics Capture would need a native helper not in-repo.",
+    "Kept gdigrab rather than invent a second desktop engine."
+  ]
+}

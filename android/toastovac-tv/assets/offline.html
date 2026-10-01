@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Toastovač — offline</title>
+<style>
+  :root { --void:#030305; --lav:#A78BFA; --aqua:#55E6D0; --dim:#5b5f6e; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    background:var(--void); color:#e9eaf0;
+    font-family:"Segoe UI", Roboto, sans-serif;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .wrap { text-align:center; max-width:90vw; }
+  .brand { font-size:6vw; font-weight:600; letter-spacing:.12em; color:#fff; }
+  .spark {
+    width:14vw; height:2px; margin:3vw auto; background:linear-gradient(90deg,transparent,var(--lav),var(--aqua),transparent);
+    border-radius:2px; position:relative;
+  }
+  .spark::before {
+    content:""; position:absolute; left:50%; top:-9px; transform:translateX(-50%);
+    border-left:5px solid transparent; border-right:5px solid transparent; border-bottom:9px solid var(--lav);
+  }
+  .status { font-size:2.6vw; color:var(--dim); letter-spacing:.05em; }
+  .hint { margin-top:2vw; font-size:1.8vw; color:#3c4050; }
+  @media (max-aspect-ratio: 16/9) { .brand{font-size:8vw} .status{font-size:3.4vw} .hint{font-size:2.4vw} }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">Toastovač</div>
+    <div class="spark"></div>
+    <div class="status">Server offline — čekám…</div>
+    <div class="hint">PC musí běžet: jarvis daemon + video server</div>
+  </div>
+  <script>
+    // Auto-retry: the moment the PC server is reachable again, load the dashboard.
+    function retry() {
+      try {
+        if (window.Toastovac && Toastovac.retry) { Toastovac.retry(); return; }
+      } catch (e) {}
+      location.reload();
+    }
+    setInterval(retry, 5000);
+  </script>
+</body>
+</html>

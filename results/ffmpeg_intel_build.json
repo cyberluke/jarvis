@@ -1,0 +1,28 @@
+{
+  "status": "PASS_BY_EXEMPTION",
+  "decision": "no custom build performed; newest Gyan FULL release binary satisfied the full P2 capability gate (binary-first policy, P1)",
+  "wouldUse": {
+    "buildSystem": "BtbN/FFmpeg-Builds (libplacebo recipe, Windows x86_64)",
+    "alternative": "MSYS2 UCRT64 native build",
+    "configureIntent": ["--enable-vulkan", "--enable-libplacebo", "--enable-libvpl", "--enable-opencl", "--enable-lcms2", "--enable-libzimg"],
+    "cpuOptIntent": ["-O3", "-march=native", "-mtune=native", "-flto"],
+    "pgo": "optional, only after green functional build"
+  },
+  "usedBinary": {
+    "ffmpegVersion": "9.0.2-full_build-www.gyan.dev",
+    "libplacebo": "v7.371.0",
+    "vulkanLoader": "1.4.356 device (Intel 0x8086:0x7d67)",
+    "libvpl": "oneVPL 2.17 (QSVEncC 8.31)",
+    "qsv": true,
+    "opencl": true
+  },
+  "gpuPath": {
+    "device": "Intel(R) Graphics 0x8086:0x7d67 (forced vulkan:0)",
+    "gpuResident": "frames stay on GPU through N->V filter; single software readback at yuv420p10le output",
+    "shaderCache": "available (shader_cache= option), not persisted this phase",
+    "stageFps": {"inverseTonemap_ffv1out": 40, "inverseTonemap_null": 52}
+  },
+  "cpuOptApplied": null,
+  "lto": null,
+  "pgo": null
+}

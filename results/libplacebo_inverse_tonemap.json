@@ -1,0 +1,33 @@
+{
+  "status": "PASS",
+  "toolchain": "FFmpeg 9.0.2 full (Intel Xe Vulkan 0x8086:0x7d67) + libplacebo v7.371.0",
+  "source": "showroom/source_5s_sdr.mp4 (1296x2304@60 BT.709 limited)",
+  "findings": {
+    "toneMapFunctionIgnoredWithoutInverseFlag": true,
+    "inverseTonemappingExpandsToOutputPeak": "PQ output -> 10000 nit container: spline P50 480n, bt.2446a P50 1091n (too hot)",
+    "contrastRecoveryIneffective": "feature-map not wired by vf_libplacebo; 0.0 == 0.3 byte-identical",
+    "targetPeakControl": "input -mastering_display max_luma=<peak> drives linear expansion by peak/100",
+    "gamutExpansionWorks": true,
+    "colorAdjustmentWorks": true,
+    "ffmpeg9ColonEscape": "double-backslash needed for drive colons in filter values (C\\\\:)"
+  },
+  "peakCalibration": {
+    "peak500": {"P50": 101.5, "P90": 388.5, "P99": 491.5, "max": 764.0, "gt1000": 0.0},
+    "peak1000": {"P50": 203.5, "P90": 780.5, "P99": 983.5, "max": 1558.0, "gt1000": 0.356},
+    "peak1200": {"P50": 264.5, "P90": 1004.5, "P99": 1277.5, "max": 2003.0, "gt1000": 10.282},
+    "peak1500": {"P50": 294.5, "P90": 1162.5, "P99": 1478.5, "max": 2369.0, "gt1000": 15.926},
+    "peak3000": {"P50": 613.5, "P90": 2345.5, "P99": 2955.5, "max": 4809.0, "gt1000": 38.102}
+  },
+  "candidates": {
+    "LP_A": {"recipe": "peak1000", "P50": 203.5, "P90": 780.5, "P99": 983.5, "max": 1558.0, "gt1000Pct": 0.356, "clipFrac": 3.7218, "blackP1": 248.5, "blackP5": 317.5, "skinHueDeltaDeg": 4.25, "skinChromaDeltaPct": 9.4, "chromaMedianDeltaPct": 22.8, "edgeOvershootPct": 40.951, "p99CV": 4.76},
+    "LP_B": {"recipe": "peak1200+sat1.06+contrast1.03", "P50": 264.5, "P90": 1004.5, "P99": 1277.5, "max": 2003.0, "gt1000Pct": 10.282, "clipFrac": 12.8196, "blackP1": 264.5, "blackP5": 335.5, "skinHueDeltaDeg": 4.25, "skinChromaDeltaPct": 16.8, "chromaMedianDeltaPct": 30.4, "edgeOvershootPct": 52.4, "p99CV": 5.09},
+    "LP_C": {"recipe": "peak1500+sat1.1+gamma0.97", "P50": 294.5, "P90": 1162.5, "P99": 1478.5, "max": 2369.0, "gt1000Pct": 15.926, "clipFrac": 18.1705, "blackP1": 265.5, "blackP5": 337.5, "skinHueDeltaDeg": 4.40, "skinChromaDeltaPct": 25.3, "chromaMedianDeltaPct": 38.0, "edgeOvershootPct": 56.471, "p99CV": 4.95}
+  },
+  "guardrails": {
+    "blacksLiftedCode": "p1 +97..+114, p5 +125..+145 (purple stage scene, not true black)",
+    "skinHueShiftDeg": "4.25..4.40 (gamut mapping to BT.2020)",
+    "clipping": "0.36..15.9% >1000n by strength; TV rolls off above 1000",
+    "temporalStable": true,
+    "p99CVRange": "4.76..5.09% (source variance ~5%)"
+  }
+}

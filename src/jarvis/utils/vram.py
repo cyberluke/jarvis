@@ -163,6 +163,15 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
     )
 
     class DXGI_ADAPTER_DESC1(Structure):
+        # Layout must match the Windows SDK struct exactly. The trailing
+        # ``Flags`` member is REQUIRED: the driver writes it (plus its
+        # alignment padding) unconditionally, so a struct that stops at
+        # ``AdapterLuid`` is 8 bytes too small and every GetDesc1 call
+        # overruns the Python heap — later surfacing as random "Windows
+        # fatal exception: access violation" inside unrelated pure-Python
+        # code (dotenv parsing, enum creation, module imports).
+        # ``_driver_slop`` additionally absorbs any driver writes past the
+        # documented size so a sloppy driver can never corrupt memory.
         _fields_ = [
             ("Description", wintypes.WCHAR * 128),
             ("VendorId", wintypes.UINT),
@@ -173,6 +182,8 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
             ("DedicatedSystemMemory", c_size_t),
             ("SharedSystemMemory", c_size_t),
             ("AdapterLuid", wintypes.LARGE_INTEGER),
+            ("Flags", wintypes.UINT),
+            ("_driver_slop", wintypes.UINT * 32),
         ]
 
     # COM method type aliases
@@ -184,14 +195,17 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
         wintypes.HRESULT, c_void_p, POINTER(DXGI_ADAPTER_DESC1),
     )
 
-    def _vtable(obj: int) -> Any:
+    def _vtable(obj: int, n: int) -> Any:
         """The object's vtable as a fixed-size pointer array.
 
         The first machine word of a COM object is its vtable pointer, so one
-        word is read at ``obj`` and re-read as the entry array.
+        word is read at ``obj`` and re-read as the entry array. ``n`` is the
+        interface's true vtable length (IDXGIFactory1 = 14, IDXGIAdapter1 =
+        11); never read past it — a longer array would over-read into
+        adjacent data.
         """
         vtable = int((c_void_p * 1).from_address(obj)[0])
-        return (c_void_p * 14).from_address(vtable)
+        return (c_void_p * n).from_address(vtable)
 
     dxgi = windll.dxgi
     create_factory = dxgi.CreateDXGIFactory1
@@ -205,7 +219,7 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
         return None
 
     # SAFETY: factory_ptr is alive until we Release() it below.
-    factory_vtable = _vtable(int(factory_ptr.value))
+    factory_vtable = _vtable(int(factory_ptr.value), 14)
     release_fn = ReleaseFunc(factory_vtable[2])
 
     # EnumAdapters1 is at vtable offset 12
@@ -220,7 +234,7 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
         if hr != 0 or not adapter_ptr.value:
             break
 
-        adapter_vtable = _vtable(int(adapter_ptr.value))
+        adapter_vtable = _vtable(int(adapter_ptr.value), 11)
         adapter_release_fn = ReleaseFunc(adapter_vtable[2])
 
         # GetDesc1 is at vtable offset 10

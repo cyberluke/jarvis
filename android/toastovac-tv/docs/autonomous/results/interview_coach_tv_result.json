@@ -1,0 +1,51 @@
+{
+  "scenario": "interview_coach_tv",
+  "status": "partial",
+  "duration_sec": 60.0,
+  "turns": 3,
+  "input_path": "InterviewBroker.inject_final",
+  "rendered_on_box": true,
+  "tv_state_last": {
+    "mode": "PYTHON INTERVIEW",
+    "question": "A decorator wraps a function. What is one common bug people introduce?",
+    "candidate": "I think await just sleeps the thread.",
+    "phase": "ended",
+    "coach": "",
+    "progress": "1:00",
+    "turn": "4"
+  },
+  "tv_notes": [
+    "Solid. Next question.",
+    "Stop. The body does not run on call — only when iterated.",
+    "Good. Add: event loop."
+  ],
+  "checks": {
+    "wall_clock_75s": false,
+    "four_turns": false,
+    "notes_short": true,
+    "questions_changed": true,
+    "listening_state_changed": true,
+    "coach_after_answer": true,
+    "coach_min_hold_2_5s": true,
+    "no_duplicate_transitions": true,
+    "no_stale_question": true,
+    "rendered_through_toastovac": true
+  },
+  "measure": {
+    "question_visible_sec": [
+      18.06,
+      18.01,
+      18.01,
+      5.93
+    ],
+    "coach_visible_sec": [
+      4.01,
+      4.0,
+      4.0
+    ],
+    "transition_count": 18,
+    "duplicate_transition_count": 0,
+    "stale_question_count": 0
+  },
+  "issues": []
+}

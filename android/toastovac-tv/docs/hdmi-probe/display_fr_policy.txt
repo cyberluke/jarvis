@@ -1,0 +1,2 @@
+=== fr_policy ===
+cat: /sys/class/display/fr_policy: Permission denied

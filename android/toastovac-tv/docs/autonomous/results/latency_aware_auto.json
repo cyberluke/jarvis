@@ -1,0 +1,40 @@
+{
+  "run": "2026-09-29",
+  "intents": ["PLAY_NOW", "PREPARE_CINEMATIC", "BACKGROUND_CACHE"],
+  "interactiveEnhancementBudgetSec": 10.0,
+  "estimator": {
+    "method": "measured media-per-wall rates (no LLM)",
+    "720p_to_1440p_mediaPerWall": 0.331,
+    "1080p_to_2160p_mediaPerWall": 0.117
+  },
+  "tests": {
+    "play_now_uncached_720p_105s": {
+      "decision": "PASS_THROUGH_FOR_LATENCY",
+      "playbackSource": "ORIGINAL",
+      "enhancementStatus": "SKIPPED_FOR_LATENCY",
+      "estimatedProcessingSec": 318.2,
+      "actualProcessingSec": 0.0,
+      "backgroundCacheScheduled": true,
+      "reason": "predicted processing cost 318.2s exceeds interactive budget 10.0s"
+    },
+    "prepare_cinematic_uncached_720p_4s": {
+      "decision": "ENHANCE",
+      "playbackSource": "ENHANCED",
+      "enhancementStatus": "OK",
+      "estimatedProcessingSec": 12.1,
+      "actualProcessingSec": 29.4,
+      "audioMode": "COPY",
+      "nvidiaUsed": false
+    },
+    "play_now_cached_720p": {
+      "decision": "ENHANCE",
+      "playbackSource": "ENHANCED",
+      "enhancementStatus": "CACHED",
+      "estimatedProcessingSec": 318.2,
+      "cacheWinsOverLatency": true
+    }
+  },
+  "estimateAccuracy": "318.2 s estimate vs 317.3 s actual on the 105 s fixture (0.3% error)",
+  "tmpCollisionFix": "unique per-job temp file name (concurrent background cache + new cast in one dir)",
+  "explicitQualityWins": "cast.youtube body quality in (cinematic, enhance, upscale, best) -> PREPARE_CINEMATIC"
+}

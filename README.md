@@ -456,11 +456,12 @@ Jarvis can act as the satellite-side client of the stock **Voice: Preview Editio
   "voice_pe_led_brightness": 0.66,
   "voice_pe_led_rgb": [0.55, 0.0, 1.0],
   "voice_pe_button_actions": {
-    "double_press": "toggle_overlay",
+    "double_press": "commit_utterance",
     "triple_press": "open_command_palette",
     "long_press": "cancel_current_agent_run",
     "easter_egg_press": "toaster_easter_egg"
   },
+  "voice_pe_no_audio_warn_s": 6.0,
   "virtual_microphone_enabled": true,
   "virtual_microphone_source": "voice_pe:20:F8:3B:09:A3:44",
   "virtual_microphone_name": "Toustovač Clean Microphone",

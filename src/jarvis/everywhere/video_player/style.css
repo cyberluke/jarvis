@@ -1,0 +1,364 @@
+/* ══════════════════════════════════════════════════════════════════
+   Toastovač Vision Shell — ambient voice OS for the living room.
+   QLED-safe design: canvas is (almost) always black. Big bright areas
+   are forbidden — accent lives in thin 2–6 px lines only, so local
+   dimming keeps working and the TV looks like a calm fake OLED.
+   ══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --void:        #030305;
+  --surface:     rgba(12, 10, 20, .78);
+  --surface-soft:rgba(18, 15, 28, .52);
+
+  --text:        rgba(246, 244, 255, .94);
+  --muted:       rgba(220, 216, 235, .58);
+
+  --lavender:    #A78BFA;
+  --violet:      #7867F2;
+  --aqua:        #55E6D0;
+  --aqua-soft:   #71D9D0;
+
+  --line:        rgba(167, 139, 250, .34);
+
+  --radius-lg:   28px;
+  --radius-pill: 999px;
+
+  --space-x:     5vw;
+  --space-y:     5vh;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--void);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hidden { opacity: 0 !important; pointer-events: none !important; }
+
+/* ── Stage: video is ALWAYS the bottom layer ────────────────────── */
+#stage {
+  position: fixed; inset: 0;
+  background: var(--void);
+  overflow: hidden;
+}
+
+#video {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  background: var(--void);
+  z-index: 0;
+}
+
+/* ── Translucent dim veil (LISTENING / THINKING / RESPONDING) ───── */
+#veil {
+  position: absolute; inset: 0;
+  z-index: 10;
+  background: rgba(3, 3, 5, .28);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .5s ease;
+}
+body[data-state="LISTENING"] #veil,
+body[data-state="THINKING"]  #veil,
+body[data-state="RESPONDING"] #veil { opacity: 1; pointer-events: none; }
+
+/* ── Subtitles ──────────────────────────────────────────────────── */
+#subtitles {
+  position: absolute;
+  z-index: 20;
+  left: 8%; right: 8%; bottom: 16%;
+  display: flex; justify-content: center;
+  pointer-events: none;
+}
+#subtitle-text {
+  max-width: 88%;
+  text-align: center;
+  font-size: clamp(32px, 3.2vw, 58px);
+  font-weight: 550;
+  line-height: 1.18;
+  letter-spacing: -0.015em;
+  color: #fff;
+  padding: 0.28em 0.55em;
+  border-radius: 14px;
+  text-shadow:
+    0 2px 6px rgba(0,0,0,.95),
+    0 0 20px rgba(0,0,0,.6);
+}
+#subtitle-text.has-bg {
+  background: rgba(0, 0, 0, .5);
+  border-radius: 16px;
+}
+
+/* ── Voice layer: centered, transparent, transient ──────────────── */
+#voice-layer {
+  position: absolute; inset: 0;
+  z-index: 30;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 18px;
+  pointer-events: none;
+  transition: opacity .4s ease;
+}
+#voice-caption {
+  max-width: 76%;
+  text-align: center;
+  font-size: clamp(34px, 4.4vw, 68px);
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-shadow: 0 4px 24px rgba(0,0,0,.85), 0 0 60px rgba(167,139,250,.25);
+}
+#voice-status {
+  font-size: clamp(20px, 1.9vw, 30px);
+  font-weight: 500;
+  color: var(--muted);
+  text-shadow: 0 2px 12px rgba(0,0,0,.8);
+}
+
+/* ── Idle: ONLY before any video exists ─────────────────────────── */
+#idle {
+  position: absolute; inset: 0;
+  z-index: 40;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 14px;
+  background: var(--void);
+  transition: opacity .6s ease;
+}
+#idle-brand {
+  font-size: clamp(48px, 7.2vw, 96px);
+  font-weight: 780;
+  letter-spacing: -0.03em;
+  background: linear-gradient(115deg, var(--lavender) 10%, var(--aqua) 60%, var(--violet) 95%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+#idle-status { font-size: clamp(22px, 2.2vw, 34px); color: var(--muted); }
+.idle-hint { font-size: clamp(15px, 1.4vw, 22px); color: rgba(220,216,235,.35); }
+
+/* ── HUD: transient chrome ──────────────────────────────────────── */
+.glass {
+  background: var(--surface);
+  -webkit-backdrop-filter: blur(28px) saturate(1.3);
+  backdrop-filter: blur(28px) saturate(1.3);
+  border: 1px solid rgba(255,255,255,.07);
+  box-shadow: 0 18px 60px rgba(0,0,0,.6);
+}
+
+#hud {
+  position: absolute; inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  transition: opacity .35s ease;
+}
+
+#topline {
+  position: absolute;
+  top: var(--space-y); left: var(--space-x); right: var(--space-x);
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 22px;
+  border-radius: var(--radius-lg);
+  pointer-events: auto;
+}
+#title {
+  flex: 1; min-width: 0;
+  font-size: clamp(20px, 1.9vw, 30px);
+  font-weight: 560;
+  letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text);
+}
+#badge {
+  font-size: clamp(14px, 1.2vw, 20px);
+  font-weight: 600;
+  padding: 5px 16px;
+  border-radius: var(--radius-pill);
+  background: rgba(167,139,250,.14);
+  color: var(--lavender);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+/* companion corner — transient info, top-right under the topline */
+#companion {
+  position: absolute;
+  top: calc(var(--space-y) * 2 + 68px); right: var(--space-x);
+  max-width: 420px;
+  padding: 10px 18px;
+  border-radius: 18px;
+  font-size: clamp(16px, 1.4vw, 24px);
+  color: var(--muted);
+  text-align: right;
+  transition: opacity .4s ease;
+}
+
+#controls {
+  position: absolute;
+  bottom: var(--space-y); left: var(--space-x); right: var(--space-x);
+  padding: 16px 22px 14px;
+  border-radius: var(--radius-lg);
+  pointer-events: auto;
+}
+.row { display: flex; align-items: center; gap: 16px; }
+.buttons { margin-top: 14px; }
+
+.seekbar {
+  flex: 1; position: relative; height: 26px; cursor: pointer;
+}
+.seek-buffer, .seek-fill {
+  position: absolute; left: 0; top: 50%;
+  height: 3px; transform: translateY(-50%);
+  border-radius: 3px;
+}
+.seek-buffer { width: 0%; background: rgba(255,255,255,.14); }
+.seek-fill   { width: 0%; background: linear-gradient(90deg, var(--violet), var(--lavender), var(--aqua)); box-shadow: 0 0 12px rgba(167,139,250,.35); }
+.seek-thumb {
+  position: absolute; top: 50%;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(255,255,255,.15), 0 0 16px rgba(167,139,250,.6);
+  transform: translate(-50%, -50%);
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(15px, 1.3vw, 22px);
+  color: var(--muted);
+  min-width: 120px; text-align: right;
+}
+
+.btn {
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.12);
+  color: var(--text);
+  font: 520 clamp(16px, 1.5vw, 24px)/1 system-ui, sans-serif;
+  padding: 12px 24px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background .18s ease, transform .12s ease;
+}
+.btn:hover  { background: rgba(167,139,250,.18); border-color: var(--line); }
+.btn:active { transform: scale(.96); }
+.spacer { flex: 1; }
+
+#vol { width: 160px; accent-color: var(--lavender); }
+
+/* ── Toast ──────────────────────────────────────────────────────── */
+#toast {
+  position: absolute;
+  z-index: 60;
+  left: 50%; bottom: calc(var(--space-y) + 64px);
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: var(--radius-pill);
+  padding: 12px 26px;
+  font-size: clamp(16px, 1.5vw, 24px);
+  color: var(--text);
+  box-shadow: 0 10px 40px rgba(0,0,0,.6);
+  transition: opacity .25s ease;
+  max-width: 80%;
+  text-align: center;
+}
+
+/* ── The Spark ────────────────────────────────────────────────────
+   A thin light line, bottom center. It is the single motion language
+   of Toastovač: calm by default, alive when something is happening.
+   QLED-safe: tiny bright line, huge black around it.               */
+#spark {
+  position: absolute;
+  z-index: 70;
+  left: 50%; bottom: calc(var(--space-y) + 6px);
+  transform: translateX(-50%);
+  width: min(360px, 46vw);
+  height: 3px;
+  border-radius: 3px;
+  overflow: hidden;
+  opacity: .55;
+  transition: opacity .6s ease, height .6s ease, width .6s ease;
+}
+#spark i {
+  display: block;
+  width: 100%; height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--violet) 22%,
+    var(--lavender) 50%,
+    var(--aqua) 78%,
+    transparent 100%);
+  box-shadow: 0 0 14px rgba(167,139,250,.5), 0 0 34px rgba(85,230,208,.22);
+  transition: filter .5s ease;
+}
+
+/* spark state choreography — driven by body[data-state] */
+body[data-state="IDLE"] #spark   { opacity: .4; }
+body[data-state="PLAYING"] #spark,
+body[data-state="PAUSED"] #spark  { opacity: .5; }
+
+/* activity: gentle sweep — a dot of light travels along the line */
+body[data-state="ACTIVITY"] #spark { opacity: .85; }
+body[data-state="ACTIVITY"] #spark i,
+body[data-state="THINKING"] #spark i {
+  background: linear-gradient(90deg,
+    transparent 0%, transparent 30%,
+    var(--lavender) 50%,
+    var(--aqua) 55%,
+    transparent 70%, transparent 100%);
+  background-size: 220% 100%;
+  animation: spark-sweep 2.4s linear infinite;
+}
+@keyframes spark-sweep {
+  0%   { background-position: 120% 0; }
+  100% { background-position: -120% 0; }
+}
+
+/* thinking: slower, softer wave */
+body[data-state="THINKING"] #spark { opacity: .9; }
+body[data-state="THINKING"] #spark i { animation-duration: 3.6s; }
+
+/* speaking: pulse */
+body[data-state="SPEAKING"] #spark { opacity: 1; }
+body[data-state="SPEAKING"] #spark i {
+  animation: spark-pulse 0.9s ease-in-out infinite;
+}
+@keyframes spark-pulse {
+  0%, 100% { filter: brightness(1);    transform: scaleX(1);    }
+  50%      { filter: brightness(1.55); transform: scaleX(1.08); }
+}
+
+/* incoming-content: dot travels one way */
+body[data-state="INCOMING"] #spark { opacity: .95; }
+body[data-state="INCOMING"] #spark i {
+  background: linear-gradient(90deg,
+    transparent 0%, transparent 55%,
+    var(--aqua) 62%,
+    transparent 70%, transparent 100%);
+  background-size: 400% 100%;
+  animation: spark-incoming 1.6s ease-in-out infinite;
+}
+@keyframes spark-incoming {
+  0%   { background-position: 130% 0; }
+  100% { background-position: -30% 0; }
+}
+
+/* error: the line dims and shivers once */
+body[data-state="ERROR"] #spark { opacity: .9; }
+body[data-state="ERROR"] #spark i {
+  background: linear-gradient(90deg, transparent, rgba(255,120,120,.9), transparent);
+  animation: spark-shiver .6s ease-in-out 2;
+}
+@keyframes spark-shiver {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(.35); }
+}
+
+/* ── misc ───────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 8px; }

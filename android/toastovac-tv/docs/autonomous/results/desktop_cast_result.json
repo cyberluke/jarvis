@@ -1,0 +1,30 @@
+{
+  "scenario": "desktop_cast",
+  "status": "pass",
+  "checks": {
+    "cast_action": true,
+    "gdigrab_capture": true,
+    "intel_hevc_qsv": true,
+    "tzhl_transport": true,
+    "single_decoder": true,
+    "hwcvideo_unblank": true
+  },
+  "metrics": {
+    "capture_backend": "ffmpeg gdigrab (GDI, primary display)",
+    "source_resolution": "1920x1080 SDR",
+    "output_canvas": "3840x2160 letterboxed (no stretch)",
+    "capture_fps_request": 30,
+    "encoder": "hevc_qsv Main10 P010",
+    "color": "bt709 (honest SDR desktop, not faked PQ)",
+    "transport": "TZHL v1 TCP :8768",
+    "bytes_after_10s": 13012076,
+    "idr_after_10s": 21,
+    "hdmi": "422,12bit VIC 97"
+  },
+  "issues": [
+    "First attempt used forced 3840x2160 gdigrab + nv12 and QSV rejected the profile; fixed to native 1080p capture + pad to 4K P010.",
+    "Windows primary is 1920x1080 SDR; do not claim 4K HDR desktop source.",
+    "Display-side dataspace remained BT2020_ITU_PQ from the prior live scene session (decoder not recreated; color metadata sticky until process restart).",
+    "No end-to-end latency probe (capture→encode→LAN→decode)."
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "scenario": "gpu_scene",
+  "status": "partial",
+  "gpu_assets_in_repo": false,
+  "apis_present": {
+    "opengl": false,
+    "d3d11": true,
+    "vulkan": true,
+    "moderngl": false
+  },
+  "notes": [
+    "moderngl: ModuleNotFoundError: No module named 'moderngl'",
+    "d3d11.dll present (no in-repo renderer binds it)",
+    "vulkan-1.dll present (no in-repo renderer binds it)"
+  ],
+  "cpu_incremental": {
+    "frames": 30,
+    "ms_per_frame": 16.75,
+    "fps_est": 59.7
+  },
+  "production_path": "CPU LiveScene incremental 3840x2160 PQ \u2192 P010 QSV",
+  "claimed_gpu_60fps": false,
+  "issues": [
+    "No existing SceneGraph GPU renderer to extend.",
+    "Did not invent a new D3D/Vulkan stack this run."
+  ]
+}

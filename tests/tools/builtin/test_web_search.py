@@ -22,10 +22,13 @@ class TestWebSearchTool:
         self.context.cfg.web_search_enabled = True
         self.context.cfg.voice_debug = False
         # Fallbacks default OFF in unit tests — individual tests that need to
-        # exercise Brave or Wikipedia flip them on explicitly. This keeps the
-        # DDG-focused tests isolated from the fallback chain (otherwise the
-        # mocked `requests.get` side-effect list runs out on the unexpected
-        # Wikipedia call, which used to surface as a cryptic success=False).
+        # exercise SearXNG, Brave or Wikipedia flip them on explicitly. This
+        # keeps the DDG-focused tests isolated from the fallback chain
+        # (otherwise the mocked `requests.get` side-effect list runs out on
+        # the unexpected fallback call, which used to surface as a cryptic
+        # success=False).
+        self.context.cfg.searxng_enabled = False
+        self.context.cfg.searxng_base_url = ""
         self.context.cfg.brave_search_api_key = ""
         self.context.cfg.wikipedia_fallback_enabled = False
 
@@ -1160,3 +1163,108 @@ class TestLanguagePlumbingEndToEnd:
         assert "self._last_detected_language: Optional[str] = None" in src
         assert src.count("self._last_detected_language = detected") >= 2
         assert "language=self._last_detected_language" in src
+
+class TestSearxngProvider:
+    """SearXNG provider: request shape (input format) and response parsing
+    (output format), plus a live check against the local instance on 8080."""
+
+    def _sample_response(self):
+        return {
+            "query": "toaster",
+            "number_of_results": 2,
+            "results": [
+                {
+                    "title": "Talkie Toaster",
+                    "url": "https://en.wikipedia.org/wiki/Talkie_Toaster",
+                    "content": "A toaster that talks back.",
+                    "engine": "wikipedia",
+                },
+                {
+                    "title": "Toaster oven reviews",
+                    "url": "https://example.org/toaster-oven",
+                    "content": "Best toaster ovens 2026",
+                    "engine": "brave",
+                },
+            ],
+        }
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_request_shape_and_parsing(self, mock_get):
+        """Input format: GET <base>/search?q=&format=json&count=N.
+
+        Output format: (title, url, content) triples, capped at count.
+        """
+        from src.jarvis.tools.builtin.web_search import _searxng_search
+
+        resp = Mock()
+        resp.status_code = 200
+        resp.json.return_value = self._sample_response()
+        mock_get.return_value = resp
+
+        triples = _searxng_search("toaster", "http://127.0.0.1:8080", count=5)
+
+        # Request shape — the exact input the local SearXNG expects.
+        mock_get.assert_called_once()
+        args, kwargs = mock_get.call_args
+        assert args[0] == "http://127.0.0.1:8080/search"
+        assert kwargs["params"]["q"] == "toaster"
+        assert kwargs["params"]["format"] == "json"
+        assert kwargs["params"]["count"] == 5
+        assert kwargs["timeout"] == 6
+
+        # Output shape — (title, url, content) with content snippet present.
+        assert len(triples) == 2
+        assert triples[0] == (
+            "Talkie Toaster",
+            "https://en.wikipedia.org/wiki/Talkie_Toaster",
+            "A toaster that talks back.",
+        )
+        assert triples[1][2] == "Best toaster ovens 2026"
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_empty_on_error(self, mock_get):
+        """Non-200 or exception -> empty list (caller falls through)."""
+        from src.jarvis.tools.builtin.web_search import _searxng_search
+
+        resp = Mock()
+        resp.status_code = 500
+        mock_get.return_value = resp
+        assert _searxng_search("q", "http://127.0.0.1:8080") == []
+
+        mock_get.side_effect = requests.ConnectionError("refused")
+        assert _searxng_search("q", "http://127.0.0.1:8080") == []
+
+    @patch("src.jarvis.tools.builtin.web_search.requests.get")
+    def test_base_url_with_path_prefix(self, mock_get):
+        """A base URL with a path prefix keeps the /search endpoint."""
+        from src.jarvis.tools.builtin.web_search import _searxng_search
+
+        resp = Mock()
+        resp.status_code = 200
+        resp.json.return_value = {"results": []}
+        mock_get.return_value = resp
+        _searxng_search("q", "http://127.0.0.1:8080/searxng")
+        args, _kwargs = mock_get.call_args
+        assert args[0] == "http://127.0.0.1:8080/searxng/search"
+
+
+class TestSearxngLiveInstance:
+    """Live check against the local SearXNG instance on port 8080.
+
+    Skipped when the instance is not running, so CI without the local
+    service stays green.
+    """
+
+    def test_local_instance_answers_json(self):
+        from src.jarvis.tools.builtin.web_search import _searxng_search
+
+        try:
+            triples = _searxng_search("toaster", "http://127.0.0.1:8080", count=3)
+        except Exception:
+            pytest.skip("local SearXNG instance not reachable on :8080")
+        if not triples:
+            pytest.skip("local SearXNG answered with no results for probe query")
+        # Output contract on the live instance: every entry has title + URL.
+        for title, url, _content in triples:
+            assert title
+            assert url.startswith("http")

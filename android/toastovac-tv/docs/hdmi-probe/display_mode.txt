@@ -1,0 +1,2 @@
+=== mode ===
+cat: /sys/class/display/mode: Permission denied

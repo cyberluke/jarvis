@@ -19,7 +19,8 @@ from ..types import ToolExecutionResult
 _FETCH_TIMEOUT_SEC = 4.0
 # Wall-clock cap for the entire cascade when fetches run in parallel.
 _CASCADE_WALL_CLOCK_SEC = 8.0
-# Hard ceiling on the whole provider chain (DDG + Brave + Wikipedia). Without
+# Hard ceiling on the whole provider chain (DDG + SearXNG + Brave +
+# Wikipedia). Without
 # this, a bad day where every provider stalls to timeout could run ~40s —
 # intolerable for a voice assistant. Past this deadline the tool gives up and
 # returns the honest-block envelope.
@@ -331,6 +332,51 @@ def _brave_search(query: str, api_key: str, count: int = 5
         if api_key and api_key in msg:
             msg = msg.replace(api_key, "***")
         debug_log(f"Brave Search failed: {msg}", "web")
+        return []
+
+
+def _searxng_search(query: str, base_url: str, count: int = 5
+                    ) -> List[Tuple[str, str, str]]:
+    """Query a local SearXNG instance's JSON API.
+
+    Returns ``(title, url, content)`` triples; the content field is the
+    engine snippet, which usually answers directly. Empty on any error so
+    the caller falls through to the next fallback. ``base_url`` may include
+    a path prefix; the instance must have its JSON output format enabled
+    (Settings → Search → Formats → JSON).
+    """
+    if not base_url:
+        return []
+    base = str(base_url).rstrip("/")
+    try:
+        response = requests.get(
+            f"{base}/search",
+            params={"q": query, "format": "json", "count": count},
+            timeout=6,
+        )
+        if response.status_code != 200:
+            debug_log(
+                f"SearXNG returned status {response.status_code}", "web",
+            )
+            return []
+        data = response.json() or {}
+        results = data.get("results") or []
+        out: List[Tuple[str, str, str]] = []
+        for item in results:
+            title = str(item.get("title") or "").strip()
+            url = str(item.get("url") or "").strip()
+            content = str(item.get("content") or "").strip()
+            if title and url:
+                out.append((title, url, content))
+            if len(out) >= count:
+                break
+        return out
+    except Exception as exc:
+        msg = str(exc)
+        # Scrub any URL-ish credentials from the log line.
+        if base and base in msg:
+            msg = msg.replace(base, "<searxng>")
+        debug_log(f"SearXNG search failed: {msg}", "web")
         return []
 
 
@@ -744,47 +790,91 @@ class WebSearchTool(Tool):
             # Fallback chain: DDG failed to give us a usable answer (either
             # rate-limited, or returned links but no fetch succeeded, or
             # returned nothing at all) AND we don't have an instant answer
-            # to lean on. Try Brave (opt-in, keyed) first, then Wikipedia
-            # (zero-config, always-on by default). Each fallback updates
-            # the same fetched_content / result_urls state the envelope
-            # selection below reads, so a success looks identical to a
-            # successful DDG fetch downstream.
-            used_source: Optional[str] = None  # "brave" | "wikipedia" | None
+            # to lean on. Try SearXNG (local meta-search, default) first,
+            # then Brave (opt-in, keyed), then Wikipedia (zero-config,
+            # always-on by default). Each fallback updates the same
+            # fetched_content / result_urls state the envelope selection
+            # below reads, so a success looks identical to a successful
+            # DDG fetch downstream.
+            used_source: Optional[str] = None  # "searxng"|"brave"|"wikipedia"|None
             need_fallback = (
                 not instant_results
                 and not fetched_content
                 and (ddg_rate_limited or not result_urls or fetch_attempted_any)
             )
             if need_fallback and _budget_left() > 0:
-                brave_key = getattr(cfg, "brave_search_api_key", "") or ""
-                if brave_key:
-                    context.user_print("🦁 Falling back to Brave Search…")
-                    brave_pairs = _brave_search(search_query, brave_key)
-                    if brave_pairs:
-                        # Replace the DDG link list with Brave's — provenance
-                        # in the payload should match the source we actually
-                        # used to answer.
-                        result_urls = brave_pairs
+                # SearXNG: the local meta-search is the default fallback —
+                # no API key, runs on the user's own machine, aggregates many
+                # engines. The instance must expose the JSON output format.
+                searxng_on = bool(getattr(cfg, "searxng_enabled", True))
+                searxng_base = str(
+                    getattr(cfg, "searxng_base_url", "") or ""
+                ).strip()
+                if searxng_on and searxng_base:
+                    context.user_print("🔎 Searching local SearXNG…")
+                    searxng_triples = _searxng_search(
+                        search_query, searxng_base
+                    )
+                    if searxng_triples:
+                        result_urls = [
+                            (title, url) for title, url, _c in searxng_triples
+                        ]
                         search_results = []
-                        for i, (title, url) in enumerate(brave_pairs, start=1):
+                        for i, (title, url, _c) in enumerate(
+                            searxng_triples, start=1
+                        ):
                             search_results.append(f"{i}. **{title}**")
                             search_results.append(f"   Link: {url}")
                             search_results.append("")
                         fetch_attempted_any = True
-                        fetched_content = _cascade_fetch(
-                            brave_pairs[:3],
-                            wall_clock_sec=min(
-                                _CASCADE_WALL_CLOCK_SEC, _budget_left()
-                            ),
-                            query=search_query,
+                        # The engine snippets usually answer directly; the
+                        # result URLs are localhost (SearXNG is local), so
+                        # the SSRF-guarded cascade fetch cannot follow them.
+                        snippets = [
+                            content for _t, _u, content in searxng_triples
+                            if content
+                        ]
+                        fetched_content = (
+                            "\n\n".join(snippets[:3]) if snippets else None
                         )
                         if fetched_content:
-                            used_source = "brave"
+                            used_source = "searxng"
                         else:
                             debug_log(
-                                "Brave returned results but no fetch succeeded",
+                                "SearXNG returned results but no content "
+                                "snippets — falling through",
                                 "web",
                             )
+                if not fetched_content:
+                    brave_key = getattr(cfg, "brave_search_api_key", "") or ""
+                    if brave_key:
+                        context.user_print("🦁 Falling back to Brave Search…")
+                        brave_pairs = _brave_search(search_query, brave_key)
+                        if brave_pairs:
+                            # Replace the DDG link list with Brave's —
+                            # provenance in the payload should match the
+                            # source we actually used to answer.
+                            result_urls = brave_pairs
+                            search_results = []
+                            for i, (title, url) in enumerate(brave_pairs, start=1):
+                                search_results.append(f"{i}. **{title}**")
+                                search_results.append(f"   Link: {url}")
+                                search_results.append("")
+                            fetch_attempted_any = True
+                            fetched_content = _cascade_fetch(
+                                brave_pairs[:3],
+                                wall_clock_sec=min(
+                                    _CASCADE_WALL_CLOCK_SEC, _budget_left()
+                                ),
+                                query=search_query,
+                            )
+                            if fetched_content:
+                                used_source = "brave"
+                            else:
+                                debug_log(
+                                    "Brave returned results but no fetch succeeded",
+                                    "web",
+                                )
 
             # Wikipedia: last-resort, runs if we still have no content. The
             # REST summary endpoint is key-free and gives us a curated
@@ -1009,7 +1099,11 @@ class WebSearchTool(Tool):
                     pass
             try:
                 count_results = len([r for r in (search_results or []) if r.strip() and not r.startswith("   ")])
-                if used_source == "brave":
+                if used_source == "searxng":
+                    context.user_print(
+                        f"✅ Answered via local SearXNG ({count_results} results)."
+                    )
+                elif used_source == "brave":
                     context.user_print(
                         f"✅ Answered via Brave Search ({count_results} results)."
                     )

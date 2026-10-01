@@ -299,6 +299,8 @@ public static class OcrOverlay
             Canvas.SetTop(row, sy + sh - 70);
             _canvas.Children.Add(row);
             EverywhereApp.Log("ocr words rendered");
+            // The drag is over: stop covering the whole desktop.
+            ShrinkToRegion(region);
         });
     }
 
@@ -409,7 +411,7 @@ public static class OcrOverlay
         }
     }
 
-    private static void Close()
+    internal static void Close()
     {
         if (EverywhereApp.Hotkeys is not null)
         {
@@ -423,6 +425,46 @@ public static class OcrOverlay
         {
             try { win.AppWindow.Hide(); } catch (Exception) { }
             try { win.Close(); } catch (Exception) { }
+        }
+        EverywhereApp.Log("ocr selector closed");
+    }
+
+    /// <summary>Close the selector when it is not mid-drag. Called by the
+    /// result overlay so a finished task's panel cannot hide behind the
+    /// fullscreen selector (§Overlay conflict).</summary>
+    public static void CloseIfNotDragging()
+    {
+        if (_window is not null && !_dragging)
+        {
+            EverywhereApp.Log("ocr selector closed (result arrived)");
+            Close();
+        }
+    }
+
+    /// <summary>Shrink the selector window from fullscreen to the captured
+    /// region (plus the bottom action row) so it stops covering the desktop
+    /// the moment the drag is done.</summary>
+    private static void ShrinkToRegion(PixelRect region)
+    {
+        var win = _window;
+        if (win is null) return;
+        try
+        {
+            var (sx, sy, sw, sh) = Windowing.MonitorHelper.PrimaryScreenPhysical();
+            var pad = 24;
+            var w = Math.Min(region.Width + pad * 2, sw);
+            var h = Math.Min(region.Height + pad * 2 + 70, sh);
+            var x = Math.Max(sx, Math.Min(region.X - pad, sx + sw - w));
+            var y = Math.Max(sy, Math.Min(region.Y - pad, sy + sh - h));
+            win.AppWindow.Resize(new Windows.Graphics.SizeInt32(
+                (int)Math.Ceiling(w), (int)Math.Ceiling(h)));
+            win.AppWindow.Move(new Windows.Graphics.PointInt32(
+                (int)Math.Ceiling(x), (int)Math.Ceiling(y)));
+            EverywhereApp.Log($"ocr selector shrunk to {w}x{h} at {x},{y}");
+        }
+        catch (Exception ex)
+        {
+            EverywhereApp.Log($"ocr shrink failed: {ex.GetType().Name}");
         }
     }
 

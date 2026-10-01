@@ -1616,13 +1616,14 @@ class TestRuntimeStatusDialog:
         assert by_key["Embeddings"] == "ollama / nomic-embed-text"
         assert by_key["Configured servers"] == "2"
         assert by_key["Status"] == "disabled"
+        assert by_key["WebAudio Bridge"] == "disabled"
         sections = [section for section, _key, _value in rows]
         assert sections == (
             ["🎙️ Assistant"] * 4
             + ["🦙 Ollama"] * 4
             + ["🧠 Models"] * 3
             + ["🔌 MCP"] * 1
-            + ["🛰️ Voice PE"] * 2
+            + ["🛰️ Voice PE"] * 3
         )
 
     def test_format_still_matches_legacy_text_layout(self):
@@ -1894,6 +1895,7 @@ class TestListeningWindowVisibility:
         import desktop_app.app as app_mod
 
         tray = app_mod.JarvisSystemTray.__new__(app_mod.JarvisSystemTray)
+        tray.app = qapp
         tray.log_viewer = MagicMock()
         tray.face_window = MagicMock()
 

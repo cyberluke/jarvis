@@ -1,0 +1,49 @@
+{
+  "step": "detail",
+  "input": "cin_cleanup.mp4",
+  "filter": "CAS",
+  "strength": 0.25,
+  "width": 1296,
+  "height": 2304,
+  "fps": 60,
+  "hdr": true,
+  "processedFrames": 2162,
+  "processingFps": 113.2,
+  "wallTimeSec": 19.1,
+  "ssimVsCleanup": 0.996557,
+  "psnrAvgDb": 44.115,
+  "rmse10bit": 6.37,
+  "mae10bit": 3.91,
+  "maxAbsDiff10bit": 226,
+  "changedPixelFraction": 0.737,
+  "pixelDifference": true,
+  "cpuCoresAvg": 3.21,
+  "gpuUtilAvgPct": 0.2,
+  "hdrMetadata": {
+    "mastering": "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)",
+    "maxCll": 1000,
+    "maxFall": 400,
+    "vui": "bt2020nc/bt2020/smpte2084"
+  },
+  "artifactProxies": {
+    "edgeFocusRatio": [16.7, 17.1, 22.0],
+    "flatChangedOver2LvlPct": [4.33, 2.94, 4.03],
+    "edgeOvershootOver2LvlPct": [0.295, 0.289, 0.404]
+  },
+  "outputs": {
+    "cin_detail.mp4": 94176969,
+    "ab_detail.mp4": 138609328,
+    "bitrateMbps": 20.9
+  },
+  "tvVerified": true,
+  "tv": {
+    "hdrCurrentType": "HDR10-GAMMA_ST2084",
+    "boxOutputFps": 59,
+    "dropsSustained": 0,
+    "dropsTransientSwitch": 914,
+    "inputFull": "0/0",
+    "createCount": 1
+  },
+  "method": "QSVEncC64 --vpp-cas sharpness=0.25,hdr=true (luma-only, 1x, no other filter)",
+  "abLabels": ["CLEANUP", "DETAIL + CAS 0.25"]
+}

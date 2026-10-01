@@ -1,0 +1,36 @@
+{
+  "date": "2026-10-01",
+  "clip": "tbsY9zC-w6U",
+  "segment": "t=15..20s (5s)",
+  "truthGate": "PASS",
+  "assets": {
+    "A": { "file": "source_5s.mp4", "description": "ORIGINAL SDR BT.709, HEVC 8-bit, 1296x2304 60fps" },
+    "B": { "file": "wrap_5s.mp4", "description": "deterministic bt709->PQ/2020 via ffmpeg zscale + QSVEnc SEI, no AI" },
+    "C": { "file": "realhdr_5s.mp4", "description": "hdrtvnetpp_agcm_stable ONNX, device=GPU" }
+  },
+  "model": {
+    "path": "tools/qsvenc/models/hdrtvnetpp/hdrtvnetpp_agcm_stable.onnx",
+    "sha256": "CA3C243EC17F16D566D544DE5039BA4DD1504E608DC449CCB8A6DD506CE71957",
+    "sizeBytes": 33837,
+    "openvino": "bundled with QSVEncC64 (version not directly exposed)",
+    "requestedDevice": "GPU",
+    "selectedDevice": "Intel(R) Graphics (iGPU), OpenCL ocl, prec=f16",
+    "silentFallback": false,
+    "compileSuccess": true,
+    "framesSubmitted": 300,
+    "framesReturned": 300,
+    "inferenceTimeSec": 117,
+    "processingFps": 2.56,
+    "gpuUtilPct": 60
+  },
+  "comparisons": {
+    "C_vs_B": { "ssimY": 0.945488, "ssimAll": 0.960619, "psnrAvgDb": 21.73, "verdict": "C != B proven, real image transform" },
+    "C_vs_A": { "ssimY": 0.932029 },
+    "B_vs_A": { "ssimY": 0.853588 }
+  },
+  "verdict": "cin_hdr.mp4 is a genuine enhanced-HDR transform, not signaling-only",
+  "notes": [
+    "QSVEncC 8-bit->10-bit no-VPP path crashes (0xC0000005); B built via zscale+SEI pass",
+    "ffmpeg zimg linear<->PQ luma conversion is a no-op (80% dark retag); QSVEnc --vpp-colorspace PQ->linear errors invalid input colorspace; grading therefore works in PQ (perceptual HDR) space"
+  ]
+}

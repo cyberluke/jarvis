@@ -1,0 +1,18 @@
+
+[cache_key.display_info]: [-7174386920218032686]
+[log.tag.HDMI]: [DEBUG]
+[persist.sys.displayinset.top]: [0]
+[persist.sys.hdmi.addr.playback]: [8]
+[persist.sys.hdmi.keep_awake]: [false]
+[persist.sys.hdmi.property_arc_support]: [false]
+[ro.build.display.id]: [UKG3.250803.001.8963]
+[ro.build.version.release_or_preview_display]: [14]
+[ro.hdmi.cec.source.playback_device_action_on_routing_control]: [wake_up_and_send_active_source]
+[ro.hdmi.cec.source.send_standby_on_sleep]: [broadcast]
+[ro.hdmi.cec_device_types]: [audio_system,playback_device]
+[ro.hdmi.device_type]: [5,4]
+[ro.hdmi.property_is_device_hdmi_cec_switch]: [true]
+[ro.hdmi.set_menu_language]: [false]
+[sys.audio.aml.music.volume.hdmi]: [25]
+[sys.audio.aml.system.volume.hdmi]: [100]
+

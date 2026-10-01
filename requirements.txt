@@ -38,6 +38,10 @@ aioesphomeapi==46.3.0
 zeroconf>=0.132.0
 # Optional BLE onboarding (Improv) for the Voice PE; guarded by an import check
 bleak>=0.22.0
+# WebSocket server of the Voice PE WebAudio bridge (protocol v271-webaudio/1,
+# ws://127.0.0.1:27123/voice-pe/v1). The code uses the ``websockets.asyncio``
+# API, so a version >= 12 is required.
+websockets>=12.0
 chatterbox-tts==0.1.2
 piper-tts>=1.3.0
 pygame>=2.1.0
@@ -49,6 +53,12 @@ nvidia-cudnn-cu12>=9.0.0; sys_platform == "win32"
 
 # MLX Whisper for Apple Silicon Macs (much faster than CPU-based faster-whisper)
 mlx-whisper>=0.4.0; sys_platform == "darwin" and platform_machine == "arm64"
+
+# Google Cast / Chromecast (Toaster Desktop Bridge + Cast sender)
+pychromecast>=14.0.0
+
+# YouTube own-player path (yt-dlp downloader with cookies)
+yt-dlp>=2025.6.30
 
 # Desktop app dependencies
 PyQt6>=6.6.0

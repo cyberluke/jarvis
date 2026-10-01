@@ -1,0 +1,2 @@
+=== print ===
+cat: /sys/class/display/print: Permission denied

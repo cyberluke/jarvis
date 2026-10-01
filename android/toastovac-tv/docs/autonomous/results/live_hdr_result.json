@@ -1,0 +1,21 @@
+{
+  "scenario": "live_hdr",
+  "status": "pass",
+  "checks": {
+    "au_assembly": true,
+    "hwcvideo_unblank": true,
+    "device_composition": true,
+    "bt2020_itu_pq": true,
+    "decoder_create_count_1": true,
+    "home_fallback_poster": true
+  },
+  "metrics": {
+    "resolution": "3840x2160",
+    "requested_fps": 15,
+    "render_ms": "20-45 (incremental CPU, static layer cached)",
+    "encoder": "hevc_qsv Main10 P010",
+    "hdmi": "422,12bit VIC 97",
+    "dataspace": "BT2020_ITU_PQ (298188800)",
+    "hwc": "HwcVideo--65536 UnBlank DEVICE"
+  }
+}

@@ -87,7 +87,9 @@ if (Test-Path -LiteralPath $evExe) {
 }
 
 # No test run here: pytest is 1 (skip) or 5 (no tests), both non-zero by design.
-& "$PSScriptRoot\..\.venv-openvino-npu\Scripts\python.exe" -W ignore -m PyInstaller --noconfirm jarvis_desktop.spec
+# The dedicated .venv-openvino-npu environment is gone; the dev interpreter
+# (python on PATH) carries the full frozen stack incl. PyInstaller.
+& python -W ignore -m PyInstaller --noconfirm jarvis_desktop.spec
 $pyi = $LASTEXITCODE
 if ($pyi -ne 0) { exit $pyi }
 

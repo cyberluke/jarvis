@@ -1,0 +1,2 @@
+=== vinfo ===
+cat: /sys/class/display/vinfo: Permission denied

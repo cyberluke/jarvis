@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Toastovač</title>
+<link rel="stylesheet" href="/style.css?v=4">
+</head>
+<body data-state="IDLE">
+<!--
+  Toastovač Vision Shell — stage architecture.
+
+  Rule: THE VIDEO IS ALWAYS THE BOTTOM VISUAL LAYER.
+  No UI state may create an opaque fullscreen surface unless we are
+  explicitly in audio-only / idle mode. Transient states (voice, thinking,
+  responding) only dim the video slightly via a translucent veil.
+
+  Layers (z):
+    #video         0   — media, always present
+    #veil          10  — translucent dim during LISTENING/THINKING/RESPONDING
+    #subtitles     20  — captions
+    #voice-layer   30  — centered voice state (text + spark)
+    #idle          40  — ONLY before any video exists (true idle/loading)
+    #hud           50  — transient chrome: topline, rail, seekbar, companion
+    #toast         60  — transient notifications
+    #spark         70  — the Toastovač Spark, bottom center, always alive
+-->
+<div id="stage">
+  <video id="video" playsinline></video>
+
+  <!-- translucent dim veil (only during voice/thinking/responding) -->
+  <div id="veil"></div>
+
+  <!-- subtitle overlay (custom renderer) -->
+  <div id="subtitles">
+    <div id="subtitle-text"></div>
+  </div>
+
+  <!-- voice layer: centered state text + spark (transient) -->
+  <div id="voice-layer" class="hidden">
+    <div id="voice-caption"></div>
+    <div id="voice-status"></div>
+  </div>
+
+  <!-- idle: only shown when there is no video yet -->
+  <div id="idle">
+    <div id="idle-brand">Toastovač</div>
+    <div id="idle-status">Waiting for a video…</div>
+    <div class="idle-hint">?v=VIDEO_ID or tell Toastovač to play something</div>
+  </div>
+
+  <!-- HUD: transient chrome -->
+  <div id="hud" class="hidden">
+    <header id="topline" class="glass">
+      <span id="title"></span>
+      <span id="badge"></span>
+    </header>
+
+    <div id="companion" class="glass"></div>
+
+    <footer id="controls" class="glass">
+      <div class="row">
+        <div id="seekbar">
+          <div id="seek-buffer" class="seek-buffer"></div>
+          <div id="seek-fill" class="seek-fill"></div>
+          <div id="seek-thumb" class="seek-thumb"></div>
+        </div>
+        <span id="time" class="time">0:00 / 0:00</span>
+      </div>
+      <div class="row buttons" id="rail">
+        <button id="btn-play" class="btn" title="Play/Pause">Play</button>
+        <button id="btn-back" class="btn" title="−10s">−10</button>
+        <button id="btn-fwd" class="btn" title="+10s">+10</button>
+        <button id="btn-subs" class="btn" title="Subtitles">Subs: Orig</button>
+        <button id="btn-full" class="btn" title="Fullscreen">Fullscreen</button>
+        <span class="spacer"></span>
+        <input id="vol" type="range" min="0" max="100" value="100" title="Volume">
+      </div>
+    </footer>
+  </div>
+
+  <!-- toast -->
+  <div id="toast" class="hidden"></div>
+
+  <!-- the Spark: bottom center, thin light line, always alive -->
+  <div id="spark" aria-hidden="true"><i></i></div>
+</div>
+
+<script src="/vendor/hls.min.js"></script>
+<script src="/app.js?v=4"></script>
+</body>
+</html>

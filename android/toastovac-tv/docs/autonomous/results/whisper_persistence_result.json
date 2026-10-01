@@ -1,0 +1,39 @@
+{
+  "scenario": "whisper_persistence",
+  "status": "pass",
+  "model": "large-v3-turbo",
+  "device": "auto",
+  "compute": "int8",
+  "load_count": 1,
+  "inference_count": 3,
+  "ensure_loaded_wall_sec": 8.04,
+  "worker_load_sec": 4.79,
+  "jobs": [
+    {
+      "n": 1,
+      "wall_sec": 2.1320857999962755,
+      "rtf": 0.06041015484427091,
+      "segs": 8,
+      "load_count_after": 1,
+      "inference_count": 1
+    },
+    {
+      "n": 2,
+      "wall_sec": 0.6878266999992775,
+      "rtf": 0.019488764220020046,
+      "segs": 8,
+      "load_count_after": 1,
+      "inference_count": 2
+    },
+    {
+      "n": 3,
+      "wall_sec": 0.6503624000033597,
+      "rtf": 0.018427257143761873,
+      "segs": 8,
+      "load_count_after": 1,
+      "inference_count": 3
+    }
+  ],
+  "production_baseline": "faster-whisper large-v3-turbo int8 auto (CPU-capable)",
+  "rtx_used": false
+}

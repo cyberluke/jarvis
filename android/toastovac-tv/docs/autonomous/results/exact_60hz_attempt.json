@@ -1,0 +1,60 @@
+{
+  "report": "exact_60hz_attempt",
+  "date": "2026-09-30",
+  "result": "PASS",
+  "outcome": "TRUE 60.000 AVAILABLE AND VERIFIED",
+  "displaySwitch": {
+    "mechanism": "cmd display set-user-preferred-display-mode 3840 2160 60.000004 0",
+    "rootUsed": false,
+    "sysfsWritten": false,
+    "accepted": true,
+    "activeModeId": 4,
+    "userPreferredModeId": 4,
+    "renderFrameRate": 60.000004,
+    "sfVsyncNanos": 16666666,
+    "resolution": "3840x2160",
+    "hdmi": "422,12bit",
+    "hdrPassthrough": true
+  },
+  "appLevelRequest": {
+    "preferredDisplayModeId": "selected by measured 3840x2160 @ ~60.000 properties",
+    "surfaceSetFrameRate": "60.0f FIXED_SOURCE CHANGE_FRAME_RATE_ALWAYS",
+    "sessionScoped": true,
+    "verifiedAfterAppRestart": true
+  },
+  "soak": {
+    "streamRateN": 60,
+    "streamRateD": 1,
+    "durationSec": 601.1,
+    "status": "PASS",
+    "fps": {
+      "requested": 60.0,
+      "producedMin": 60.0,
+      "producedAvg": 60.01,
+      "encodedMin": 59.96,
+      "encodedAvg": 59.99,
+      "sentMin": 59.59,
+      "sentAvg": 60.05,
+      "boxOutputMin": 58.86,
+      "boxOutputAvg": 59.98
+    },
+    "dropGrowth": 0,
+    "decoderCreateCountMax": 1,
+    "readbackBytesPerFrameMax": 0,
+    "orientation": "VERTICAL_FLIP",
+    "deadlineMissesTotal": 5341
+  },
+  "sentFpsSamplerNote": "first run read 58.47 on a 2s window; cross-check proved zero wire loss (1200 frames/20s sent, all received); sampler widened to 5s; rerun passed",
+  "comparison": {
+    "60_over_1_on_60.000_display": "PASS 10min",
+    "60000_over_1001_on_59.94_display": "PASS 10min (P2.4 historical)",
+    "60_over_1_on_59.94_display": "FAIL (display mismatch, historical)"
+  },
+  "productionDecision": {
+    "rateNumerator": 60,
+    "rateDenominator": 1,
+    "fps": 60.0,
+    "displayRefreshHz": 60.000004,
+    "reason": "EDID VIC 97 native 60.000 mode exposed and accepted; 10-minute end-to-end soak PASS with no backlog, no drops, createCount=1"
+  }
+}

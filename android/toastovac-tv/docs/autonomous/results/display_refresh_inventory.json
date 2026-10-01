@@ -1,0 +1,65 @@
+{
+  "report": "display_refresh_inventory",
+  "date": "2026-09-30",
+  "box": "192.168.1.122:5555",
+  "question": "does the Homatics+Samsung chain expose and accept true 60.000 Hz 2160p",
+  "answer": "TRUE 60.000 EXPOSED AND ACCEPTED",
+  "modes": [
+    {"appModeId": 1, "sfModeId": 0, "w": 1920, "h": 1080, "refreshRate": 59.94006, "rate": "60000/1001"},
+    {"appModeId": 2, "sfModeId": 1, "w": 1920, "h": 1080, "refreshRate": 60.000004, "rate": "60/1"},
+    {"appModeId": 3, "sfModeId": 2, "w": 3840, "h": 2160, "refreshRate": 59.94006, "rate": "60000/1001"},
+    {"appModeId": 4, "sfModeId": 3, "w": 3840, "h": 2160, "refreshRate": 60.000004, "rate": "60/1"},
+    {"appModeId": 5, "sfModeId": 4, "w": 3840, "h": 2160, "refreshRate": 50.0, "rate": "50/1"},
+    {"appModeId": 6, "sfModeId": 5, "w": 3840, "h": 2160, "refreshRate": 29.97003, "rate": "30000/1001"},
+    {"appModeId": 7, "sfModeId": 6, "w": 3840, "h": 2160, "refreshRate": 30.000002, "rate": "30/1"},
+    {"appModeId": 8, "sfModeId": 7, "w": 3840, "h": 2160, "refreshRate": 25.0, "rate": "25/1"},
+    {"appModeId": 9, "sfModeId": 8, "w": 3840, "h": 2160, "refreshRate": 23.976025, "rate": "24000/1001"},
+    {"appModeId": 10, "sfModeId": 9, "w": 3840, "h": 2160, "refreshRate": 24.000002, "rate": "24/1"}
+  ],
+  "currentModeId": 4,
+  "currentRefreshRate": 60.000004,
+  "currentVsyncNanos": 16666666,
+  "bootMode": {"w": 3840, "h": 2160, "refreshRate": 59.94006, "modeId": 3},
+  "userPreferredModeId": 4,
+  "edid": {
+    "hashSha256First32": "8d57e19c06145b67ac5bdbe9dbcd2e7f",
+    "manufacturer": "SAM",
+    "productCode": "0fa2",
+    "productName": "SAMSUNG",
+    "version": "1.3",
+    "weekYear": "2019 w1",
+    "physicalMm": "1420 x 800",
+    "vicList": "97 16 31 4 19 5 20 32 33 34 93 94 95 96 101 102 98 100 7 22 3 18 63 64",
+    "vic97_2160p60": true,
+    "hdr": "HDR/13 DeepColor",
+    "colorimetry": "0xc3",
+    "maxTmdsClock1MHz": 300,
+    "maxTmdsClock2MHz": 600,
+    "maxFrlRate": 0,
+    "allm": 1,
+    "scdc": 1
+  },
+  "hdmi": {
+    "attr": "422,12bit",
+    "dispCap": ["2160p60hz", "1080p60hz", "2160p50hz", "smpte60hz"]
+  },
+  "hdrCapabilities": {
+    "supportedHdrTypes": [2, 3, 4],
+    "maxLuminance": 1000.0,
+    "maxAverageLuminance": 1000.0,
+    "conversion": "HDR_CONVERSION_PASSTHROUGH",
+    "isForceSdr": false
+  },
+  "switchMechanism": "cmd display set-user-preferred-display-mode 3840 2160 60.000004 0 (non-root)",
+  "switchAccepted": true,
+  "verification": {
+    "mActiveModeId": 4,
+    "renderFrameRate": 60.000004,
+    "sfActiveModeRefreshRate": 60.000004,
+    "sfVsyncNanos": 16666666,
+    "hdmiUnchanged": "422,12bit",
+    "hdrUnchanged": true,
+    "resolutionUnchanged": "3840x2160"
+  },
+  "status": "TRUE_60_ACCEPTED"
+}

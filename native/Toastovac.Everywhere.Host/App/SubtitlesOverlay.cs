@@ -30,7 +30,7 @@ public static class SubtitlesOverlay
     private static StackPanel? _castMenu;
     private static ComboBox? _castDeviceCombo;
     private static ComboBox? _castModeCombo;
-    private static TextBox? _castUrlInput;
+    private static ComboBox? _castUrlInput;
     private static Button? _castStartBtn;
     private static Button? _castStopBtn;
     private static TextBlock? _castStatusText;
@@ -44,14 +44,50 @@ public static class SubtitlesOverlay
             Close();
             return;
         }
-        _dq = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
-        var win = new Window { Title = "Toustovač Subtitles" };
-        _window = win;
-        win.Content = BuildContent();
-        Windowing.Chrome.MakeToolOverlay(win);
-        PositionBottom(win);
-        win.Activate();
-        LoadOptions();
+// Create the window on the toolbar window's UI thread. The hotkey
+        // hook and the pipe push channel fire on background threads; a Window
+        // created off the UI thread renders as an empty black box (no content
+        // composition, no input), which the user can then never close.
+        var dq = anchor?.DispatcherQueue
+            ?? Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        if (dq is null)
+        {
+            EverywhereApp.Log("subtitles overlay: no dispatcher queue");
+            return;
+        }
+        dq.TryEnqueue(() => CreateWindow());
+    }
+
+    private static void CreateWindow(bool openCast = false)
+    {
+        try
+        {
+            _dq = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+            var win = new Window { Title = "Toustovač Subtitles" };
+            _window = win;
+            win.Closed += (_, _) =>
+            {
+                _running = false;
+                _pollTimer?.Dispose();
+                _pollTimer = null;
+                _window = null;
+            };
+            win.Content = BuildContent();
+            Windowing.Chrome.MakeToolOverlay(win);
+            PositionBottom(win);
+            try { win.AppWindow.Show(); } catch (Exception) { }
+            try { win.Activate(); } catch (Exception) { }
+            LoadOptionsAsync();
+            if (openCast)
+            {
+                ToggleCastMenu();
+            }
+        }
+        catch (Exception ex)
+        {
+            LogSub($"toggle failed: {ex.GetType().Name}: {ex.Message}");
+            Close();
+        }
     }
 
     private static UIElement BuildContent()
@@ -129,41 +165,70 @@ public static class SubtitlesOverlay
         // work area. PrimaryScreenPhysical uses GetSystemMetrics (physical
         // pixels regardless of DPI virtualization), so the bar spans the whole
         // screen on a 4K/200% display.
-        var (wx, wy, ww, wh) = Windowing.MonitorHelper.PrimaryScreenPhysical();
-        var height = Math.Min(wh * 0.26, wh - 100);
-        win.AppWindow.Resize(new Windows.Graphics.SizeInt32(
-            (int)ww, (int)height));
-        win.AppWindow.Move(new Windows.Graphics.PointInt32(
-            (int)wx, (int)(wy + wh - height)));
+        try
+        {
+            var (wx, wy, ww, wh) = Windowing.MonitorHelper.PrimaryScreenPhysical();
+            var height = Math.Min(wh * 0.26, wh - 100);
+            win.AppWindow.Resize(new Windows.Graphics.SizeInt32(
+                (int)ww, (int)height));
+            win.AppWindow.Move(new Windows.Graphics.PointInt32(
+                (int)wx, (int)(wy + wh - height)));
+        }
+        catch (Exception ex)
+        {
+            LogSub($"position failed: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
-    private static void LoadOptions()
+    /// <summary>Load broker options off the UI thread — a slow or dead broker
+    /// must never freeze the overlay window (a frozen UI thread renders black
+    /// and becomes unclosable).</summary>
+    private static void LoadOptionsAsync()
     {
         if (_pipe is null) return;
-        var reply = _pipe.RoundTrip(BuildCmd("options"));
-        LogSub($"options reply: {(reply is null ? "null" : "ok")}");
-        if (reply is null) return;
-        if (reply.Value.TryGetProperty("kind", out var kind))
+        var dq = _dq;
+        Task.Run(() =>
         {
-            LogSub($"options kind: {kind.GetString()}");
-        }
-        if (!reply.Value.TryGetProperty("sources", out var sources))
-        {
-            LogSub("options: no sources field");
-            return;
-        }
+            JsonElement? reply;
+            try
+            {
+                reply = _pipe.RoundTrip(BuildCmd("options"));
+            }
+            catch (Exception ex)
+            {
+                LogSub($"options failed: {ex.GetType().Name}");
+                return;
+            }
+            LogSub($"options reply: {(reply is null ? "null" : "ok")}");
+            if (reply is null) return;
+            if (reply.Value.TryGetProperty("kind", out var kind))
+            {
+                LogSub($"options kind: {kind.GetString()}");
+            }
+            var sources = reply.Value.TryGetProperty("sources", out var src)
+                ? src : default;
+            var targets = reply.Value.TryGetProperty("targets", out var tgt)
+                ? tgt : default;
+            dq?.TryEnqueue(() => ApplyOptions(sources, targets));
+        });
+    }
 
-        foreach (var s in sources.EnumerateArray())
+    private static void ApplyOptions(JsonElement sources, JsonElement targets)
+    {
+        if (sources.ValueKind == JsonValueKind.Array)
         {
-            var code = s.GetProperty("code").GetString() ?? "";
-            var label = s.TryGetProperty("name_native", out var nn)
-                ? $"{nn.GetString()} ({code})" : code;
-            _srcCombo?.Items.Add(new ComboBoxItem { Content = label, Tag = code });
+            foreach (var s in sources.EnumerateArray())
+            {
+                var code = s.GetProperty("code").GetString() ?? "";
+                var label = s.TryGetProperty("name_native", out var nn)
+                    ? $"{nn.GetString()} ({code})" : code;
+                _srcCombo?.Items.Add(new ComboBoxItem { Content = label, Tag = code });
+            }
         }
         if (_srcCombo is not null && _srcCombo.Items.Count > 0)
             _srcCombo.SelectedIndex = 0;
 
-        if (reply.Value.TryGetProperty("targets", out var targets))
+        if (targets.ValueKind == JsonValueKind.Array)
         {
             foreach (var t in targets.EnumerateArray())
             {
@@ -214,22 +279,36 @@ public static class SubtitlesOverlay
     private static void LoadPoliteness(string language)
     {
         if (_pipe is null || _politenessCombo is null) return;
-        var reply = _pipe.RoundTrip(BuildCmd("options"));
-        if (reply is null) return;
-        if (!reply.Value.TryGetProperty("politeness", out var all)) return;
-        if (!all.TryGetProperty(language, out var entries)) return;
-        _politenessCombo.Items.Clear();
-        _politenessCombo.Items.Add(new ComboBoxItem
-        { Content = "Neutral / default", Tag = "" });
-        foreach (var e in entries.EnumerateArray())
+        var dq = _dq;
+        Task.Run(() =>
         {
-            var native = e.GetProperty("native").GetString() ?? "";
-            var en = e.GetProperty("en").GetString() ?? "";
-            var key = e.GetProperty("key").GetString() ?? "";
-            _politenessCombo.Items.Add(new ComboBoxItem
-            { Content = $"{native} — {en}", Tag = key });
-        }
-        _politenessCombo.SelectedIndex = 0;
+            var reply = _pipe.RoundTrip(BuildCmd("options"));
+            if (reply is null) return;
+            if (!reply.Value.TryGetProperty("politeness", out var all)) return;
+            if (!all.TryGetProperty(language, out var entries)) return;
+            var items = new List<ComboBoxItem>
+            {
+                new() { Content = "Neutral / default", Tag = "" },
+            };
+            foreach (var e in entries.EnumerateArray())
+            {
+                var native = e.GetProperty("native").GetString() ?? "";
+                var en = e.GetProperty("en").GetString() ?? "";
+                var key = e.GetProperty("key").GetString() ?? "";
+                items.Add(new ComboBoxItem
+                { Content = $"{native} — {en}", Tag = key });
+            }
+            dq?.TryEnqueue(() =>
+            {
+                if (_politenessCombo is null) return;
+                _politenessCombo.Items.Clear();
+                foreach (var it in items)
+                {
+                    _politenessCombo.Items.Add(it);
+                }
+                _politenessCombo.SelectedIndex = 0;
+            });
+        });
     }
 
     private static void Start()
@@ -242,17 +321,23 @@ public static class SubtitlesOverlay
         var politeness = (_politenessCombo?.SelectedItem as ComboBoxItem)
             ?.Tag as string ?? "";
         var liveAudio = _ttsCheck?.IsChecked == true;
-        var reply = _pipe.RoundTrip(BuildCmd("start",
-            ("source", source), ("target", target),
-            ("live_audio", liveAudio), ("politeness", politeness)));
-        if (reply is not null
-            && reply.Value.TryGetProperty("kind", out var k)
-            && k.GetString() == "subtitles_started")
+        // RoundTrip can block for seconds on a slow broker — never on the
+        // UI thread (a frozen UI thread renders black and unclosable).
+        Task.Run(() =>
         {
-            _running = true;
-            _pollTimer = new System.Threading.Timer(_ => Poll(),
-                null, 300, 300);
-        }
+            var reply = _pipe.RoundTrip(BuildCmd("start",
+                ("source", source), ("target", target),
+                ("live_audio", liveAudio), ("politeness", politeness)));
+            if (reply is not null
+                && reply.Value.TryGetProperty("kind", out var k)
+                && k.GetString() == "subtitles_started"
+                && _window is not null)
+            {
+                _running = true;
+                _pollTimer = new System.Threading.Timer(_ => Poll(),
+                    null, 300, 300);
+            }
+        });
     }
 
     private static void Stop()
@@ -260,7 +345,15 @@ public static class SubtitlesOverlay
         _running = false;
         _pollTimer?.Dispose();
         _pollTimer = null;
-        _pipe?.RoundTrip(BuildCmd("stop"));
+        var pipe = _pipe;
+        if (pipe is null) return;
+        try
+        {
+            Task.Run(() => pipe.RoundTrip(BuildCmd("stop")));
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private static void ToggleCast()
@@ -324,12 +417,21 @@ public static class SubtitlesOverlay
         modeRow.Children.Add(_castModeCombo);
         _castMenu.Children.Add(modeRow);
 
-        // URL input row (for media_url / youtube modes)
+        // URL input row (for media_url / youtube modes). A plain WinUI
+        // TextBox crashes this single-file build with FileNotFoundException
+        // (0x80070002) during render — the same landmine ResultOverlay
+        // documents — so the editable ComboBox (its internal editor is a
+        // different control path) is used; `.Text` reads the typed URL.
         var urlRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         urlRow.Children.Add(new TextBlock { Text = "URL:", FontSize = 14,
             VerticalAlignment = VerticalAlignment.Center, MinWidth = 60 });
-        _castUrlInput = new TextBox { MinWidth = 300, FontSize = 14,
-            PlaceholderText = "https://..." };
+        _castUrlInput = new ComboBox
+        {
+            IsEditable = true,
+            MinWidth = 300,
+            FontSize = 14,
+            PlaceholderText = "https://...",
+        };
         urlRow.Children.Add(_castUrlInput);
         _castMenu.Children.Add(urlRow);
 
@@ -364,22 +466,35 @@ public static class SubtitlesOverlay
     private static void LoadCastDevices()
     {
         if (_pipe is null || _castDeviceCombo is null) return;
-        _castDeviceCombo.Items.Clear();
-        var reply = _pipe.RoundTrip(BuildCmd("cast_devices"));
-        if (reply is null) return;
-        if (!reply.Value.TryGetProperty("devices", out var devices)) return;
-        foreach (var d in devices.EnumerateArray())
+        var dq = _dq;
+        Task.Run(() =>
         {
-            var name = d.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
-            var model = d.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
-            _castDeviceCombo.Items.Add(new ComboBoxItem
+            var reply = _pipe.RoundTrip(BuildCmd("cast_devices"));
+            if (reply is null) return;
+            if (!reply.Value.TryGetProperty("devices", out var devices)) return;
+            var items = new List<ComboBoxItem>();
+            foreach (var d in devices.EnumerateArray())
             {
-                Content = $"{name} ({model})",
-                Tag = name
+                var name = d.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                var model = d.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
+                items.Add(new ComboBoxItem
+                {
+                    Content = $"{name} ({model})",
+                    Tag = name
+                });
+            }
+            dq?.TryEnqueue(() =>
+            {
+                if (_castDeviceCombo is null) return;
+                _castDeviceCombo.Items.Clear();
+                foreach (var it in items)
+                {
+                    _castDeviceCombo.Items.Add(it);
+                }
+                if (_castDeviceCombo.Items.Count > 0)
+                    _castDeviceCombo.SelectedIndex = 0;
             });
-        }
-        if (_castDeviceCombo.Items.Count > 0)
-            _castDeviceCombo.SelectedIndex = 0;
+        });
     }
 
     private static void StartCastSession()
@@ -399,24 +514,28 @@ public static class SubtitlesOverlay
         if (mode == "local_file")
             fields.Add(("path", url));
 
-        var reply = _pipe.RoundTrip(BuildCmd("cast_start", fields.ToArray()));
-        if (reply is not null && reply.Value.TryGetProperty("active", out var active) && active.GetBoolean())
+        Task.Run(() =>
         {
-            if (_castStatusText is not null)
-                _castStatusText.Text = "Cast session started";
-            EverywhereApp.Log("cast session started");
-        }
-        else
-        {
-            if (_castStatusText is not null)
-                _castStatusText.Text = "Failed to start cast session";
-        }
+            var reply = _pipe.RoundTrip(BuildCmd("cast_start", fields.ToArray()));
+            var ok = reply is not null
+                && reply.Value.TryGetProperty("active", out var active)
+                && active.GetBoolean();
+            _dq?.TryEnqueue(() =>
+            {
+                if (_castStatusText is not null)
+                {
+                    _castStatusText.Text = ok
+                        ? "Cast session started" : "Failed to start cast session";
+                }
+            });
+            EverywhereApp.Log(ok ? "cast session started" : "cast session start failed");
+        });
     }
 
     private static void StopCastSession()
     {
         if (_pipe is null) return;
-        _pipe.RoundTrip(BuildCmd("cast_stop"));
+        Task.Run(() => _pipe.RoundTrip(BuildCmd("cast_stop")));
         if (_castStatusText is not null)
             _castStatusText.Text = "Cast session stopped";
     }
@@ -462,7 +581,7 @@ public static class SubtitlesOverlay
         });
     }
 
-    private static void Close()
+    internal static void Close()
     {
         Stop();
         var win = _window;

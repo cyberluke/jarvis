@@ -1,0 +1,2 @@
+=== cap ===
+cat: /sys/class/display/cap: Permission denied

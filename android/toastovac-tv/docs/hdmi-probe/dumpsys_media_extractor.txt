@@ -1,0 +1,36 @@
+Available extractors:
+              AAC Extractor: plugin_version(3), uuid(4fd80eae03d24d729eb948fa6bb54613), version(1), path(/apex/com.android.media/lib/extractors/libaacextractor.so), supports: aac 
+               AM Extractor: plugin_version(3), uuid(b8e1bd5b204140b69eedbbdbc7f36ac5), version(1), path(/apex/com.amlogic.mediaextractor/lib/extractors/libamextractor.so), supports: flv wmv avi asf rm rmvb 
+              AMR Extractor: plugin_version(3), uuid(c86639c92f3140aca715fa01b4493aaf), version(1), path(/apex/com.android.media/lib/extractors/libamrextractor.so), supports: amr awb 
+             FLAC Extractor: plugin_version(3), uuid(1364b048cc454fda9934327d0ebf9829), version(1), path(/apex/com.android.media/lib/extractors/libflacextractor.so), supports: flac fl 
+             MIDI Extractor: plugin_version(3), uuid(ef6cca0af8a243e6ba5fdfcd7c9a7ef2), version(1), path(/apex/com.android.media/lib/extractors/libmidiextractor.so), supports: imy mid midi mxmf ota rtttl rtx smf xmf 
+              MP3 Extractor: plugin_version(3), uuid(812a3f6cc8cf46deb5293774b14103d4), version(1), path(/apex/com.android.media/lib/extractors/libmp3extractor.so), supports: mp2 mp3 mpeg mpg mpga 
+              MP4 Extractor: plugin_version(3), uuid(27575c6744174c548d3d8e626985a164), version(2), path(/apex/com.android.media/lib/extractors/libmp4extractor.so), supports: 3g2 3ga 3gp 3gpp 3gpp2 m4a m4r m4v mov mp4 qt 
+      MPEG2-PS/TS Extractor: plugin_version(3), uuid(3d1dcfebe40a436da574c2438a555e5f), version(1), path(/apex/com.android.media/lib/extractors/libmpeg2extractor.so), supports: m2p m2ts mts ts 
+         Matroska Extractor: plugin_version(3), uuid(abbedd9238c44904a4c1b3f45f899980), version(1), path(/apex/com.android.media/lib/extractors/libmkvextractor.so), supports: mka mkv webm 
+              Ogg Extractor: plugin_version(3), uuid(8cc5cd06f772495e8a62cba9649374e9), version(1), path(/apex/com.android.media/lib/extractors/liboggextractor.so), supports: oga ogg opus 
+              WAV Extractor: plugin_version(3), uuid(7d61385858374a3884c5332d1cddee27), version(1), path(/apex/com.android.media/lib/extractors/libwavextractor.so), supports: wav 
+
+Recent extractors, most recent first:
+  09-28 21:02:18: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->5321, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressInvalid.ogg), 0, 9847)))), pid 5321: deleted
+    track {srte: (int32_t) 44100, mime: (char*) audio/vorbis, dura: (int64_t) 182539, csd1: no type, size 4038), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 239920, #chn: (int32_t) 1} : deleted
+  09-28 21:02:18: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->5321, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressReturn.ogg), 0, 6246)))), pid 5321: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted
+  09-28 21:02:17: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->5321, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressSpacebar.ogg), 0, 5952)))), pid 5321: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted
+  09-28 21:02:17: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->5321, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressDelete.ogg), 0, 5832)))), pid 5321: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted
+  09-28 21:02:16: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->5321, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressStandard.ogg), 0, 5837)))), pid 5321: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted
+  09-28 21:02:16: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->5321, RemoteDataSource(FileSource(fd(/product/media/audio/ui/Effect_Tick.ogg), 0, 5136)))), pid 5321: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 94000, csd1: no type, size 3796), csd0: no type, size 30), chnm: (int32_t) 3, brte: (int32_t) 96000, #chn: (int32_t) 2} : deleted
+  05-22 04:04:43: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->701, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressReturn.ogg), 0, 6246)))), pid 701: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted
+  05-22 04:04:43: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->701, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressInvalid.ogg), 0, 9847)))), pid 701: deleted
+    track {srte: (int32_t) 44100, mime: (char*) audio/vorbis, dura: (int64_t) 182539, csd1: no type, size 4038), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 239920, #chn: (int32_t) 1} : deleted
+  05-22 04:04:43: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->701, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressSpacebar.ogg), 0, 5952)))), pid 701: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted
+  05-22 04:04:43: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->701, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressDelete.ogg), 0, 5832)))), pid 701: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted
+  05-22 04:04:41: OggExtractor for mime NULL, source TinyCacheSource(CallbackDataSource(620->701, RemoteDataSource(FileSource(fd(/product/media/audio/ui/KeypressStandard.ogg), 0, 5837)))), pid 701: deleted
+    track {srte: (int32_t) 48000, mime: (char*) audio/vorbis, dura: (int64_t) 108145, csd1: no type, size 3920), csd0: no type, size 30), chnm: (int32_t) 1, brte: (int32_t) 140000, #chn: (int32_t) 1} : deleted

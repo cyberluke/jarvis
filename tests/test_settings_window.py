@@ -59,7 +59,7 @@ class TestFieldMetadata:
         valid_types = {
             "bool", "int", "float", "str", "choice", "device",
             "list", "password", "mmdevice_capture", "mmdevice_render",
-            "model",
+            "model", "color", "slider", "interview_headset",
         }
         for fm in FIELD_METADATA:
             assert fm.field_type in valid_types, (

@@ -1,0 +1,2 @@
+=== edid_parsing ===
+ok

@@ -1,0 +1,2 @@
+=== dpms ===
+cat: /sys/class/drm/card0-HDMI-A-1/dpms: Permission denied

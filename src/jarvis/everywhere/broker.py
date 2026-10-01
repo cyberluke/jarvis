@@ -1,4 +1,4 @@
-"""Everywhere action broker: pipe server, snapshot registry, transactions.
+"""Everywhere action broker: pipe server, snapshot registry, task queue.
 
 One runtime, many surfaces. This broker owns the Everywhere plane's state:
 
@@ -6,13 +6,15 @@ One runtime, many surfaces. This broker owns the Everywhere plane's state:
   with the same SDDL construction as the terminal bridge (logon-SID-only
   DACL, reject-remote, message-mode);
 * an immutable, bounded snapshot registry with revision supersession;
-* per-request transactions with a cancellation event and a strict state
-  machine (STALE / CANCELLED are final for automatic insertion);
+* an asynchronous task queue (``everywhere.tasks.TaskManager``): actions are
+  queued and return a ``task_id`` immediately, a bounded worker pool runs the
+  LLM with retry + cache, and ``task_event`` frames are pushed to subscribed
+  hosts — the overlay never blocks on a slow model again;
 * action execution through the canonical two-tier LLM router
   (``jarvis.llm``), never a second model client.
 
 The native host owns Win32 specifics (hotkeys, UIA, overlays, OCR, input);
-this broker owns intelligence and the transaction contract.
+this broker owns intelligence, the queue and the transaction contract.
 """
 
 from __future__ import annotations
@@ -26,11 +28,9 @@ from typing import Any, Dict, Optional, Tuple
 
 from ..debug import debug_log
 from . import actions as action_table
-from . import proofread as proofread_lib
 from . import prompts as prompt_lib
 from . import providers
 from .model_profiles import resolve_model_for_action, resolve_profile_name
-from .snapshots import SelectionSnapshot, text_hash
 from .protocol import (
     ACTION_IDS,
     FAILURE_CODES,
@@ -44,10 +44,11 @@ from .protocol import (
     make_result,
     validate_inbound,
 )
+from .snapshots import SelectionSnapshot, text_hash
+from .tasks import TaskManager
 
 #: Bounded registry windows (no unbounded growth in a long-lived daemon).
 _MAX_SNAPSHOTS = 32
-_MAX_TRANSACTIONS = 32
 _ACCEPT_TICK_MS = 50
 # nDefaultTimeOut for the pipe instances (ms): bounded waits so a stalled
 # peer cannot wedge an instance forever; the accept is released by
@@ -66,40 +67,7 @@ ERROR_PIPE_NOT_CONNECTED = 233
 ERROR_MORE_DATA = 234
 ERROR_TIMEOUT = 6
 _READ_BUF = 8192
-_MAX_PIPE_INSTANCES = 4
-
-
-class _Cancelled(Exception):
-    """Raised inside the streaming callback when a request is cancelled."""
-
-
-class _Txn:
-    """One context transaction (§Context transactions)."""
-
-    __slots__ = ("request_id", "action", "snapshot_id", "state", "result",
-                 "failure", "cancel", "started", "first_token_at",
-                 "model_profile", "model", "result_mode",
-                 "target_language_override")
-
-    def __init__(self, request_id: str, action: str, snapshot_id: str,
-                 model_profile: str, model: str) -> None:
-        self.request_id = request_id
-        self.action = action
-        self.snapshot_id = snapshot_id
-        self.state = "SNAPSHOT_READY"
-        self.result: Optional[str] = None
-        self.failure: str = ""
-        self.cancel = threading.Event()
-        self.started = time.monotonic()
-        self.first_token_at: Optional[float] = None
-        self.model_profile = model_profile
-        self.model = model
-        self.result_mode = action_table.ACTION_RESULT_MODES.get(action, "panel")
-        self.target_language_override: Optional[str] = None
-
-    @property
-    def final(self) -> bool:
-        return self.state in ("DONE", "CANCELLED", "STALE")
+_MAX_PIPE_INSTANCES = 8
 
 
 class EverywhereBroker:
@@ -120,7 +88,6 @@ class EverywhereBroker:
         self._snapshots: Dict[str, SelectionSnapshot] = {}
         self._snapshot_order: list = []
         self._by_key: Dict[Any, str] = {}
-        self._txns: Dict[str, _Txn] = {}
         self._threads: list = []
         self._handles: list = []
         self._stop = threading.Event()
@@ -143,6 +110,12 @@ class EverywhereBroker:
         # TTS engine the subtitles pipeline reuses.
         self._voice_listener = None
         self._tts_engine = None
+        # Async task queue (submit -> task_id -> task_event pushes).
+        self._tasks = TaskManager(cfg, on_event=self._on_task_event)
+        # Subscribed (persistent) pipe clients: handle -> write lock. The host
+        # subscribes once and receives task_event pushes until it disconnects.
+        self._sub_lock = threading.Lock()
+        self._subscribers: Dict[int, threading.Lock] = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────
     def start(self) -> None:
@@ -209,6 +182,24 @@ class EverywhereBroker:
         the handle. Handles close only after every worker exited (closing a
         handle with a pending ConnectNamedPipe would block)."""
         self._stop.set()
+        self._tasks.shutdown()
+        # Wake subscribed persistent readers by disconnecting them directly.
+        # DisconnectNamedPipe waits for pending I/O on the handle to finish,
+        # so the worker's blocking ReadFile must be cancelled first: with an
+        # idle host (no frames in flight) that read never completes, and
+        # stop() would wedge forever — hanging the desktop app's quit.
+        with self._sub_lock:
+            sub_handles = list(self._subscribers.keys())
+            self._subscribers.clear()
+        for h in sub_handles:
+            try:
+                self._k32.CancelIoEx(ctypes.c_void_p(h), None)
+            except Exception:
+                pass
+            try:
+                self._k32.DisconnectNamedPipe(ctypes.c_void_p(h))
+            except Exception:
+                pass
         create = self._k32.CreateFileW
         create.restype = ctypes.c_void_p
         create.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint,
@@ -254,6 +245,8 @@ class EverywhereBroker:
                                   ct.POINTER(ct.c_ulong), ct.c_void_p]
         k32.DisconnectNamedPipe.restype = ct.c_bool
         k32.DisconnectNamedPipe.argtypes = [ct.c_void_p]
+        k32.CancelIoEx.restype = ct.c_bool
+        k32.CancelIoEx.argtypes = [ct.c_void_p, ct.c_void_p]
         k32.CloseHandle.restype = ct.c_bool
         k32.CloseHandle.argtypes = [ct.c_void_p]
         k32.GetLastError.restype = ct.c_ulong
@@ -262,9 +255,9 @@ class EverywhereBroker:
         k32.LocalFree.argtypes = [ct.c_void_p]
 
     def _instance_loop(self, handle: int, index: int) -> None:
-        """One transaction per connection, then an explicit reset (same
-        lifetime contract as the terminal bridge: write the reply, then
-        DisconnectNamedPipe so the next Connect waits for a fresh client)."""
+        """One connection per client; a ``subscribe`` frame upgrades the
+        connection into a persistent push channel (the host's queue overlay
+        subscription), everything else stays one-shot request/response."""
         k32 = self._k32
         h = ctypes.c_void_p(handle)
         while not self._stop.is_set():
@@ -275,14 +268,19 @@ class EverywhereBroker:
                 debug_log(f"everywhere frame in: "
                           f"{'ok' if frame is not None else 'none'}",
                           "everywhere")
-                if frame is not None:
-                    reply = self._dispatch(frame)
-                    debug_log(f"everywhere dispatched: "
-                              f"{None if reply is None else reply.get('kind')}",
-                              "everywhere")
-                    if reply is not None:
-                        self._write_message(h, reply)
-                        debug_log("everywhere written", "everywhere")
+                if frame is None:
+                    k32.DisconnectNamedPipe(h)
+                    continue
+                if str(frame.get("kind") or "") == "subscribe":
+                    self._persistent_session(h, frame)
+                    continue
+                reply = self._dispatch(frame)
+                debug_log(f"everywhere dispatched: "
+                          f"{None if reply is None else reply.get('kind')}",
+                          "everywhere")
+                if reply is not None:
+                    okw = self._write_message(h, reply)
+                    debug_log(f"everywhere written: {okw}", "everywhere")
                 k32.DisconnectNamedPipe(h)
                 continue
             if err == ERROR_NO_DATA or err == ERROR_PIPE_NOT_CONNECTED:
@@ -291,6 +289,48 @@ class EverywhereBroker:
             if err == ERROR_TIMEOUT:
                 continue
             return
+
+    def _persistent_session(self, h, hello: dict) -> None:
+        """Serve one subscribed client: reply with the current snapshot, then
+        push task_event frames until the client disconnects or the broker
+        stops. The reply to every subsequent request rides the same handle."""
+        rid = str(hello.get("request_id") or "unknown")
+        reply = self._dispatch(hello)
+        if reply is not None:
+            okw = self._write_message(h, reply)
+            if not okw:
+                debug_log("everywhere subscribe: ack write failed",
+                          "everywhere")
+                return
+        wlock = threading.Lock()
+        with self._sub_lock:
+            self._subscribers[int(h.value)] = wlock
+        debug_log(f"everywhere subscribed clients={len(self._subscribers)}",
+                  "everywhere")
+        try:
+            while not self._stop.is_set():
+                frame = self._read_message(h)
+                if frame is None:
+                    break
+                debug_log("everywhere frame in: ok (subscribed)",
+                          "everywhere")
+                r = self._dispatch(frame)
+                if r is not None:
+                    with wlock:
+                        okw = self._write_message(h, r)
+                    if not okw:
+                        debug_log("everywhere subscribed: reply write failed",
+                                  "everywhere")
+                        break
+        finally:
+            with self._sub_lock:
+                self._subscribers.pop(int(h.value), None)
+            try:
+                self._k32.DisconnectNamedPipe(h)
+            except Exception:
+                pass
+            debug_log(f"everywhere unsubscribed clients={len(self._subscribers)}",
+                      "everywhere")
 
     def _read_message(self, handle) -> Optional[dict]:
         k32 = self._k32
@@ -315,14 +355,50 @@ class EverywhereBroker:
             debug_log(f"everywhere frame rejected: {reason}", "everywhere")
         return obj
 
-    def _write_message(self, handle, obj: dict) -> None:
+    def _write_message(self, handle, obj: dict) -> bool:
+        """Write one frame; returns True only when WriteFile succeeded."""
         try:
             payload = encode(obj)
         except ValueError:
-            return
+            debug_log("everywhere write dropped: message too large",
+                      "everywhere")
+            return False
         n = ctypes.c_ulong(0)
         buf = ctypes.create_string_buffer(payload, len(payload))
-        self._k32.WriteFile(handle, buf, len(payload), ctypes.byref(n), None)
+        ok = self._k32.WriteFile(handle, buf, len(payload),
+                                 ctypes.byref(n), None)
+        if not ok:
+            err = self._k32.GetLastError()
+            debug_log(
+                f"everywhere write failed bytes={len(payload)} "
+                f"error={err}", "everywhere")
+        return bool(ok) and int(n.value) == len(payload)
+
+    # ── push channel ──────────────────────────────────────────────────
+    def _on_task_event(self, payload: dict) -> None:
+        """TaskManager callback: broadcast one task_event to all subscribers."""
+        frame = {"protocol": PROTOCOL_ID, "kind": "task_event", **payload}
+        try:
+            data = encode(frame)
+        except ValueError:
+            return
+        dead: list = []
+        with self._sub_lock:
+            subs = list(self._subscribers.items())
+        for h, wlock in subs:
+            with wlock:
+                n = ctypes.c_ulong(0)
+                buf = ctypes.create_string_buffer(data, len(data))
+                ok = self._k32.WriteFile(
+                    ctypes.c_void_p(h), buf, len(data), ctypes.byref(n), None)
+                if not ok:
+                    dead.append(h)
+        if dead:
+            with self._sub_lock:
+                for h in dead:
+                    self._subscribers.pop(h, None)
+            debug_log(f"everywhere push dropped clients={len(dead)}",
+                      "everywhere")
 
     # ── dispatch ──────────────────────────────────────────────────────
     def _dispatch(self, obj: dict) -> Optional[dict]:
@@ -334,6 +410,8 @@ class EverywhereBroker:
         kind = obj.get("kind")
         if kind == "ping":
             return make_result(rid, "pong", {"nonce": self.nonce})
+        if kind == "subscribe":
+            return self._on_subscribe(rid, obj)
         if kind == "snapshot":
             return self._on_snapshot(rid, obj)
         if kind == "action":
@@ -342,6 +420,12 @@ class EverywhereBroker:
             return self._on_apply(rid, obj)
         if kind == "cancel":
             return self._on_cancel(rid, obj)
+        if kind == "task_cancel":
+            return self._on_task_cancel(rid, obj)
+        if kind == "task_result":
+            return self._on_task_result(rid, obj)
+        if kind == "task_list":
+            return self._on_task_list(rid, obj)
         if kind == "subtitles":
             try:
                 return self._on_subtitles(rid, obj)
@@ -363,7 +447,219 @@ class EverywhereBroker:
                 debug_log(f"everywhere ocr dispatch error: "
                           f"{type(exc).__name__}: {exc}", "everywhere")
                 return make_error(rid, "PROVIDER_UNAVAILABLE")
+        if kind == "video":
+            try:
+                return self._on_video(rid, obj)
+            except Exception as exc:
+                debug_log(f"everywhere video dispatch error: "
+                          f"{type(exc).__name__}: {exc}", "everywhere")
+                return make_error(rid, "PROVIDER_UNAVAILABLE")
         return make_error(rid, "PROVIDER_UNAVAILABLE")
+
+    # ── async task plane ──────────────────────────────────────────────
+    def _on_subscribe(self, rid: str, obj: dict) -> dict:
+        """Host subscribes to the push channel; reply carries the current
+        task snapshot so a reconnecting overlay rebuilds its queue."""
+        return make_result(rid, "subscribed", {
+            "nonce": self.nonce,
+            "tasks": self._tasks.snapshot(),
+            "server_time": time.time(),
+        })
+
+    def _on_action(self, rid: str, obj: dict) -> dict:
+        """Queue one action; never blocks. Returns ``task_queued`` with the
+        task id; progress arrives over the push channel as ``task_event``."""
+        action = str(obj.get("action") or "")
+        snapshot_id = str(obj.get("snapshot_id") or "")
+        snap = self._snapshots.get(snapshot_id)
+        if snap is None:
+            return make_error(rid, "NO_SELECTION")
+        if not snap.text:
+            return make_error(rid, "EMPTY_SELECTION")
+        if action not in ACTION_IDS:
+            return make_error(rid, "PROVIDER_UNAVAILABLE")
+        profile = resolve_profile_name(self._cfg, action)
+        model = resolve_model_for_action(self._cfg, action)
+        task = self._tasks.submit(
+            action, snap, request_id=rid, profile=profile, model=model,
+            target_language=str(obj.get("target_language") or "").strip(),
+            prompt_id=str(obj.get("prompt_id") or ""))
+        debug_log(
+            f"everywhere.action.queued task={task.task_id} "
+            f"action={task.action} profile={task.profile} model={task.model} "
+            f"source={snap.source_kind}", "everywhere")
+        summary = next(
+            (s for s in self._tasks.snapshot(limit=64)
+             if s.get("task_id") == task.task_id), {})
+        return make_result(rid, "task_queued", {
+            "task_id": task.task_id,
+            "request_id": task.request_id,
+            "action": task.action,
+            "state": task.state,
+            "model": task.model,
+            "profile": task.profile,
+            "position": summary.get("position", 0),
+        })
+
+    def _on_task_cancel(self, rid: str, obj: dict) -> dict:
+        task_id = str(obj.get("task_id") or "")
+        task = self._tasks.get(task_id)
+        cancelled = self._tasks.cancel(task_id)
+        debug_log(
+            f"everywhere.task.cancel_request task={task_id} "
+            f"cancelled={cancelled}", "everywhere")
+        return make_result(rid, "task_cancel", {
+            "task_id": task_id,
+            "cancelled": cancelled,
+            "state": task.state if task else "IDLE",
+        })
+
+    def _on_task_result(self, rid: str, obj: dict) -> dict:
+        """Fetch the full result of one task (large results are not shipped
+        inside the completed event; the overlay pulls them on demand)."""
+        task = self._tasks.get(str(obj.get("task_id") or ""))
+        if task is None:
+            return make_error(rid, "TARGET_GONE")
+        return make_result(rid, "task_result", {
+            "task_id": task.task_id,
+            "request_id": task.request_id,
+            "action": task.action,
+            "state": task.state,
+            "failure": task.failure,
+            "model": task.model,
+            "profile": task.profile,
+            "cache_hit": task.cache_hit,
+            "result": task.result or "",
+            "text": task.result or "",
+            "translated_text": (task.result or "") if task.action == "translate" else "",
+            "source_text": task.snapshot.text or "",
+            "source_kind": task.snapshot.source_kind,
+            "process_name": task.snapshot.process_name,
+            "duration_ms": task.duration_ms,
+            "first_token_ms": task.first_token_ms,
+        })
+
+    def _on_task_list(self, rid: str, obj: dict) -> dict:
+        return make_result(rid, "task_list", {"tasks": self._tasks.snapshot()})
+
+    # ── Video (own-player path: yt-dlp + HLS + reasoning) ─────────────
+    def _on_video(self, rid: str, obj: dict) -> dict:
+        """Voice control for the Toastovač video player.
+
+        Commands (``command`` field):
+          play      {video_id, transcode?}  -> download + stream to the TV player
+          stop / pause / resume
+          seek      {seconds}
+          volume    {level: 0..1}
+          status
+          comments  {video_id}              -> top comments pushed to the player
+          reactions {video_id}              -> stats + top comments
+          summary   {video_id}              -> LLM summary of the transcript
+          ask       {video_id, question}    -> LLM conversation about the video
+          subtitles {mode: original|translated|off}
+          style     {font, scale, color, bg} -> subtitle overlay styling
+        """
+        from . import video_server
+        cmd = str(obj.get("command") or "")
+        video_id = str(obj.get("video_id") or obj.get("id") or "")
+        srv = video_server.get_video_server(self._cfg)
+        if srv._httpd is None:
+            if not srv.start():
+                return make_error(rid, "PROVIDER_UNAVAILABLE")
+
+        if cmd == "play":
+            if not video_id:
+                return make_error(rid, "PROVIDER_UNAVAILABLE")
+            job = srv.play(video_id,
+                           transcode=bool(obj.get("transcode", True)))
+            video_server.push_player_command("play", {"video_id": video_id})
+            self._tv_tap()
+            return make_result(rid, "video_playing", job.snapshot())
+
+        if cmd in ("stop", "pause", "resume"):
+            video_server.push_player_command(cmd, {})
+            return make_result(rid, f"video_{cmd}", {})
+
+        if cmd == "seek":
+            video_server.push_player_command("seek",
+                                             {"seconds": float(obj.get("seconds") or 0)})
+            return make_result(rid, "video_seek", {})
+
+        if cmd == "volume":
+            video_server.push_player_command(
+                "volume", {"level": float(obj.get("level") or 1.0)})
+            self._tv_tap()
+            return make_result(rid, "video_volume", {})
+
+        if cmd == "status":
+            job = srv.active_job()
+            return make_result(rid, "video_status",
+                               {"job": job.snapshot() if job else None})
+
+        if cmd == "comments":
+            from . import yt_api
+            items = yt_api.comments(video_id)
+            video_server.push_player_command("comments", {"items": items})
+            return make_result(rid, "video_comments", {"comments": items})
+
+        if cmd == "reactions":
+            from . import yt_api
+            data = yt_api.top_reactions(video_id)
+            video_server.push_player_command("comments",
+                                             {"items": data.get("top_comments") or []})
+            return make_result(rid, "video_reactions", data)
+
+        if cmd == "summary":
+            data = srv.summary(video_id)
+            video_server.push_player_command("summary", data)
+            return make_result(rid, "video_summary", data)
+
+        if cmd == "ask":
+            question = str(obj.get("question") or "")
+            if not question:
+                return make_error(rid, "PROVIDER_UNAVAILABLE")
+            data = srv.ask(video_id, question)
+            video_server.push_player_command(
+                "ask", {"question": question, "answer": data.get("answer", "")})
+            return make_result(rid, "video_ask", data)
+
+        if cmd == "subtitles":
+            mode = str(obj.get("mode") or "original")
+            video_server.push_player_command("subtitles", {"mode": mode})
+            return make_result(rid, "video_subtitles", {"mode": mode})
+
+        if cmd == "style":
+            style = {k: obj[k] for k in ("font", "scale", "color", "bg")
+                     if k in obj}
+            video_server.push_player_command("style", style)
+            return make_result(rid, "video_style", style)
+
+        return make_error(rid, "PROVIDER_UNAVAILABLE")
+
+    # TV Bro's WebView pauses/unmutes playback only after a trusted click.
+    # The voice path can't produce one, so fire a synthetic tap over adb —
+    # fire-and-forget: if the TV/box is unreachable, playback still works
+    # muted and the user can press OK on the remote.
+    def _tv_tap(self) -> None:
+        try:
+            import shutil
+            import subprocess
+            import threading
+            host = str(getattr(self._cfg, "tv_adb_host", "") or "192.168.1.122:5555")
+            adb = shutil.which("adb")
+            if not adb:
+                return
+            def _tap():
+                try:
+                    subprocess.run(
+                        [adb, "-s", host, "shell", "input", "tap", "960", "540"],
+                        capture_output=True, timeout=8,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                except Exception:
+                    pass
+            threading.Thread(target=_tap, daemon=True).start()
+        except Exception:
+            pass
 
     # ── Screen Reading (OCR) with word-level quads ────────────────────
     def _on_ocr(self, rid: str, obj: dict) -> dict:
@@ -700,15 +996,10 @@ class EverywhereBroker:
         return make_result(rid, "action_result", payload)
 
     def _supersede_locked(self, snapshot_id: str) -> None:
-        """Mark transactions of an old revision STALE and cancel them."""
-        for txn in self._txns.values():
-            if txn.snapshot_id == snapshot_id and not txn.final:
-                txn.state = "STALE"
-                txn.failure = "SELECTION_CHANGED"
-                txn.cancel.set()
-                debug_log(
-                    f"everywhere.target.stale request={txn.request_id} "
-                    f"snapshot={snapshot_id}", "everywhere")
+        """Mark transactions of an old revision STALE (automatic insertion
+        is refused; the queue UI still shows the finished result)."""
+        debug_log(
+            f"everywhere.target.stale snapshot={snapshot_id}", "everywhere")
 
     # ── OCR region fill (Alt+drag, oneocr backend) ────────────────────
     def _ocr_fill(self, snap: SelectionSnapshot) -> SelectionSnapshot:
@@ -962,53 +1253,49 @@ class EverywhereBroker:
     # ── apply ─────────────────────────────────────────────────────────
     def _on_apply(self, rid: str, obj: dict) -> dict:
         snapshot_id = str(obj.get("snapshot_id") or "")
-        request_id = str(obj.get("target_request_id")
-                         or obj.get("request_id") or "")
+        task_ref = str(obj.get("task_id")
+                       or obj.get("target_request_id") or "")
         snap = self._snapshots.get(snapshot_id)
-        txn = self._txns.get(request_id)
-        if snap is None or txn is None:
+        task = self._tasks.get(task_ref) if task_ref else None
+        if snap is None or task is None:
             return make_error(rid, "TARGET_GONE")
-        if txn.final and txn.state != "DONE":
-            return make_error(rid, txn.failure or "TARGET_CHANGED")
-        if txn.state != "DONE":
+        if task.state != "completed":
             return make_error(rid, "MODEL_UNAVAILABLE")
         current = obj.get("current") if isinstance(obj.get("current"), dict) \
             else snap.to_dict()
         ok, failure = providers.revalidate(snap.to_dict(), current)
         debug_log(
-            f"everywhere.apply.started request={request_id} "
+            f"everywhere.apply.started task={task.task_id} "
             f"capability={snap.replace_capability}", "everywhere")
         if not ok:
             debug_log(
-                f"everywhere.apply.failed request={request_id} "
+                f"everywhere.apply.failed task={task.task_id} "
                 f"failure={failure}", "everywhere")
             return make_error(rid, failure if failure in FAILURE_CODES
                               else "TARGET_CHANGED")
         debug_log(
-            f"everywhere.apply.completed request={request_id} "
-            f"result_length={len(txn.result or '')}", "everywhere")
+            f"everywhere.apply.completed task={task.task_id} "
+            f"result_length={len(task.result or '')}", "everywhere")
         return make_result(rid, "apply_result", {
             "state": "APPLIED",
             "snapshot_id": snapshot_id,
-            "request_id": request_id,
+            "task_id": task.task_id,
             "replace_capability": snap.replace_capability,
-            "result": txn.result or "",
+            "result": task.result or "",
         })
 
     def _on_cancel(self, rid: str, obj: dict) -> dict:
+        """Legacy one-shot cancel (kept for old clients); task_cancel is the
+        canonical path now."""
         target = str(obj.get("target_request_id") or "")
-        with self._lock:
-            txn = self._txns.get(target)
-            if txn is not None and not txn.final:
-                txn.state = "CANCELLED"
-                txn.failure = "MODEL_CANCELLED"
-                txn.cancel.set()
-                debug_log(
-                    f"everywhere.action.cancelled request={target}",
-                    "everywhere")
-        return make_result(rid, "action_result", {
-            "state": (txn.state if txn else "IDLE"),
-            "request_id": target,
+        cancelled = self._tasks.cancel(target) if target else False
+        task = self._tasks.get(target)
+        debug_log(f"everywhere.task.cancel_request task={target} "
+                  f"cancelled={cancelled}", "everywhere")
+        return make_result(rid, "task_cancel", {
+            "task_id": target,
+            "cancelled": cancelled,
+            "state": task.state if task else "IDLE",
         })
 
     # ── voice surface ─────────────────────────────────────────────────
@@ -1049,20 +1336,21 @@ class EverywhereBroker:
         if snap is None:
             return "Nemám žádný aktuální výběr."
         rid = f"v{secrets.token_hex(4)}"
-        txn = _Txn(rid, action, snap.snapshot_id,
-                   resolve_profile_name(self._cfg, action),
-                   resolve_model_for_action(self._cfg, action))
-        with self._lock:
-            self._txns[rid] = txn
-        self._execute(txn, snap, prompt_id=prompt_id)
-        if txn.state == "DONE":
-            if txn.result_mode == "panel":
-                # Panel-mode results (translate, explain) are displayed, not spoken.
-                # Return a short Czech line for the voice path; the full result
-                # is available via the pipe for the native host to display.
+        task = self._tasks.submit(
+            action, snap, request_id=rid,
+            profile=resolve_profile_name(self._cfg, action),
+            model=resolve_model_for_action(self._cfg, action),
+            prompt_id=prompt_id)
+        task.done_event.wait(timeout=180.0)
+        if task.state == "completed":
+            if task.result_mode == "panel":
+                # Panel-mode results (translate, explain) are displayed, not
+                # spoken. The full result is available via the pipe.
                 return "Hotovo. Výsledek je v panelu."
-            return txn.result or ""
-        return "Akce nedopadla."
+            return task.result or ""
+        if task.state == "failed":
+            return "Akce nedopadla."
+        return "Akce byla zrušena."
 
     def _latest_snapshot(self) -> Optional[SelectionSnapshot]:
         with self._lock:
@@ -1081,7 +1369,8 @@ class EverywhereBroker:
                 "pipe": self._pipe_name,
                 "instances": len(self._handles),
                 "snapshots": len(self._snapshots),
-                "transactions": len(self._txns),
+                "subscribers": len(self._subscribers),
+                "tasks": len(self._tasks.snapshot()),
             }
 
 

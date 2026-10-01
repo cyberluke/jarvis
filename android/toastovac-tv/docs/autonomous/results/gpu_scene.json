@@ -1,0 +1,26 @@
+{
+  "run": "2026-09-29",
+  "backend": "OpenGL (moderngl 5.12) on Intel Graphics",
+  "resolution": "3840x2160 (physical, unchanged)",
+  "hdr": "PQ / Rec.2020 preserved (PQ-encoded RGB48 output, same as CPU path)",
+  "renderer": "GPUScene: static layer texture + clock/spark/blob fragment shaders, RGBA16UI integer readback",
+  "measurements": {
+    "gpuDrawFps": 227,
+    "gpuDrawMsPerFrame": 4.4,
+    "fullRenderFps": 23.9,
+    "fullRenderMsPerFrame": 41.9,
+    "readbackFormat": "RGBA16UI (raw uint16, zero numpy conversion)",
+    "readbackBytesPerFrame": 66355200,
+    "scenePipelineFps": 15
+  },
+  "box": {
+    "renderedOnBox": true,
+    "source": "scene:live",
+    "clients": 1,
+    "surface": "SurfaceView BLAST Consumer 4096x2304",
+    "framesAdvancing": true
+  },
+  "bottleneck": "glReadPixels (4K RGBA16UI ~42 ms) on this Intel iGPU; GPU draw alone is 4.4 ms. Python-side float conversion measured 145-210 ms/frame and was eliminated via integer readback.",
+  "pathTo30_60Fps": "zero-copy GL -> QSV via D3D11 texture sharing (ffmpeg -init_hw_device d3d11va + hevc_qsv hw_frames); documented next step, not attempted (native interop)",
+  "cpuFallback": "create_scene() falls back to LiveScene only if GL init fails"
+}

@@ -127,8 +127,30 @@ current interactive logon SID (same construction as the terminal bridge).
 Frames are 4-byte big-endian payload length + UTF-8 JSON, protocol id
 `toustovac-everywhere/1`, request-id correlated duplex messages. No TCP.
 
-Message kinds: `snapshot`, `action`, `action_result`, `apply`, `apply_result`,
-`cancel`, `ping`, `pong`.
+Message kinds — inbound: `snapshot`, `action`, `apply`, `cancel`, `ping`,
+`subtitles`, `coach`, `ocr`, `subscribe`, `task_cancel`, `task_result`,
+`task_list`. Outbound: `action_result`, `apply_result`, `pong`, `error`,
+`subtitles_options/started/stopped/poll`, `coach_started/stopped/poll/summary`,
+`ocr_result`, `ocr_page`, `subscribed`, `task_queued`, `task_event`,
+`task_result`, `task_list`, `task_cancel`.
+
+### 9.1 Async task plane
+
+The host opens one persistent connection and sends `subscribe`; the broker
+acks with `subscribed` (full task snapshot) and then pushes `task_event`
+frames. `action` no longer blocks: it returns `task_queued` with a `task_id`,
+and progress arrives as `task_event` (`queued`, `running`, `streaming`,
+`retrying`, `completed`, `failed`, `cancelled`). Events carry the result only
+up to 30 000 chars and set `truncated`; the host pulls the full result on
+demand via `task_result`. The broker runs up to
+`everywhere_max_concurrent_tasks` tasks in parallel, retries retryable
+failures (`everywhere_max_retries`), memoizes
+translate/rewrite/explain/prompt results in an LRU+TTL cache
+(`everywhere_cache_*`), and keeps a bounded history
+(`everywhere_history_max`). `apply` accepts an optional `task_id` so Insert
+targets the task's snapshot; `task_cancel` cancels one task, `task_list`
+returns the current snapshot. The daemon respawns a crashed native host
+(watchdog with backoff) so the plane self-heals without user interaction.
 
 ## 10. Observability
 

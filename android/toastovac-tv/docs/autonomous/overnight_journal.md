@@ -1,0 +1,21 @@
+# Overnight journal
+
+- 01:15 — HDMI 422,12bit VIC 97; LiveHdr HOME; live HwcVideo Blank; no :8768 sender.
+- 01:20 — Golden HEVC extracted; live QSV capture valid Main10 4K BT.2020 PQ on PC.
+- 01:25 — Root cause: per-NAL mux + `00 01` false start codes; first picture TRAIL_N.
+- 01:30 — AU assembler + CONFIG-then-IDR; Amlogic FIRST_IDR; HwcVideo UnBlank DEVICE BT2020_ITU_PQ.
+- 01:35 — Incremental CPU scene (~25 ms/frame) replaces 230–400 ms full raster / preroll.
+- 01:40 — HOME poster fallback until first decoder frame.
+- 06:00 — Korean Short x6uD7GeAj84 downloaded via yt-dlp job path.
+- 06:10 — Whisper large-v3-turbo (D:\_MODELS) Korean transcript 8 cues, RTF 0.056.
+- 06:11 — Czech SRT via Toastovač chat_with_messages.
+- 06:16 — cast.youtube switched live source; ~11 Mbps; HwcVideo UnBlank.
+- 06:17 — Interview coach 70 s wall-clock, 4 evaluated turns, Whisper-final injection.
+- 06:20 — Desktop gdigrab 1080p → pad 4K P010 QSV; HwcVideo UnBlank.
+- 06:22 — Restored live HDR scene as idle.
+- 06:51 — TZHL v2 STREAM_AUDIO PCM 48 kHz stereo; AudioTrack CONFIG; first A/V ~157 ms (audio started before first IDR).
+- 06:55 — Hold PCM until first video IDR + 80 ms AudioTrack buffer: avAvg=-15 ms, p50=-15, p95=14, maxAbs=68, underruns=0, createCount=1, HwcVideo UnBlank.
+- 06:56 — WhisperWorker: load 4.8 s (warm cache), 3 jobs, load_count=1, RTF 0.060 / 0.019 / 0.018.
+- 06:56 — cast.interviewCoach painted 4K PQ scene; 70 s / 4 turns; HwcVideo UnBlank.
+- 06:57 — GPU probe: d3d11/vulkan DLLs present, no in-repo renderer; CPU incremental 16.75 ms/frame (~60 fps est). WGC/ddagrab absent; gdigrab kept.
+- 06:58 — Restored live HDR scene.

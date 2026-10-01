@@ -1,0 +1,2 @@
+=== debug ===
+cat: /sys/class/display/debug: Permission denied

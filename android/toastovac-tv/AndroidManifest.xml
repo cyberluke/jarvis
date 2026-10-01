@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ai.toastovac.tv"
+    android:versionCode="2"
+    android:versionName="0.2.0">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+
+    <!-- Android 14 box (Homatics R Plus). minSdk 26 = modern WebView APIs only. -->
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="37" />
+
+    <application
+        android:name=".VisionBootstrap"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.Toastovac"
+        android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="true"
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="false">
+
+        <!--
+          Toastovač = HOME. After POWER ON / HOME press / reboot the box
+          lands in the dashboard. No browser in the critical path.
+        -->
+        <activity
+            android:name=".LiveHdrActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation|locale|layoutDirection">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- 4K SurfaceProbe: fullscreen SurfaceView 3840x2160 diagnostic (phase 1) -->
+        <activity
+            android:name=".ProbeActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation|locale|layoutDirection" />
+
+        <!-- 4K SurfaceProbe: TYPE_APPLICATION_OVERLAY variant (phase 2 diagnostic) -->
+        <service
+            android:name=".ProbeOverlayService"
+            android:exported="true" />
+
+        <!-- Companion Overlay: 1920×1080 RGBA, shared scene graph -->
+        <service
+            android:name=".CompanionOverlayService"
+            android:exported="true" />
+
+        <!-- VideoProbe: native 4K video path (MediaPlayer/MediaCodec -> HwcVideo plane) -->
+        <activity
+            android:name=".VideoProbeActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation|locale|layoutDirection" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation|locale|layoutDirection" />
+
+        <!-- A2 probe: app-created YUV SurfaceView vs HwcVideo DEVICE classification -->
+        <activity
+            android:name=".YuvPlaneProbeActivity"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|density|uiMode|keyboard|keyboardHidden|navigation|locale|layoutDirection" />
+    </application>
+</manifest>

@@ -1,0 +1,63 @@
+{
+  "report": "qsv_zero_copy",
+  "status": "WORKING",
+  "pipeline": "SceneGraph -> Intel D3D11 RGBA16F -> GPU compute RGB->P010 -> oneVPL QSV HEVC Main10 -> persistent hevc_metadata bsf + HDR10 SEI injection -> cast_host AU assembler -> TZHL -> one Amlogic decoder -> HwcVideo DEVICE -> Samsung HDR",
+  "hardConstraints": {
+    "readbackBytesPerFrame": 0,
+    "nvidiaNvenc": "forbidden",
+    "secondDecoder": "forbidden (createCount=1 invariant)"
+  },
+  "imageCorrectness": {
+    "sar": "1:1 (AspectRatioW=1, AspectRatioH=1)",
+    "orientationMode": "VERTICAL_FLIP",
+    "deviceQuirk": "Homatics/Amlogic 4K HEVC video plane vertically flips this native encoder's stream; scoped to HOMATICS_AMLOGIC_VIDEO_PLANE (pipe mode), local --out files NONE",
+    "overridePrecedence": "--flip arg -> TOASTOVAC_FLIP env (0=none 1=vertical 2=rotate180) -> profile default -> NONE",
+    "fullFrame": "3840x2160 geomContentCrop, buffer 4096x2304, geomBufferTransform=0",
+    "decoderRotationMetadata": "KEY_ROTATION=0 (neutral; correction is upstream pre-flip)"
+  },
+  "hdr": {
+    "vuiSource": "HEVC_METADATA_BSF",
+    "primaries": "bt2020 (9)",
+    "transfer": "smpte2084 / PQ (16)",
+    "matrix": "bt2020nc (9)",
+    "range": "limited (video_full_range_flag=0)",
+    "videoFormat": 5,
+    "level": 153,
+    "seiSource": "HEVC_METADATA_BSF (cast_host _hdr10_sei_nal on every VCL frame: payload 144 content-light + 137 mastering-display, two NALs, 0x4E 0x01 header, G/B/R order)",
+    "staticMetadata": "MaxCLL=1000, MaxFALL=400, BT.2020 mastering primaries G(8500,39850) B(6550,2300) R(35400,14600), WP(15635,16450), L(10000000,50)",
+    "sfDataspace": "BT2020_ITU_PQ (298188800)",
+    "hwc": "composition type=DEVICE (2)",
+    "sfLayerHdrMetadataTypes": "0 in the TZHL live path for native AND golden (control-tested); TV HDR switch driven by VUI + dataspace"
+  },
+  "runtimeQuirksFrozen": [
+    "oneVPL QueryIOSurf returns -15 -> fixed 8-surface pool",
+    "EncodeFrameAsync requires a real non-null bitstream pointer",
+    "bitstream MaxLength must cover BufferSizeInKB x 1000 (16 MiB)",
+    "GetHDL must fill runtime-owned mfxHDLPair storage",
+    "Query is used in-place (separate output throws NULL_PTR)",
+    "status 2 = MFX_WRN_DEVICE_BUSY must be retried",
+    "HEVC SAR must be 1:1",
+    "Intel runtime does not reliably emit requested VUI/HDR SEI -> persistent hevc_metadata bsf + SEI injection",
+    "Homatics/Amlogic live video plane requires vertical source pre-flip for this native encoder path"
+  ],
+  "fps": {
+    "requested": "per-session parameter (cast.scene fps; default 30; 59.94 supported for display-matched ceiling)",
+    "statusFields": ["requestedFps", "producedFps", "encodedFps", "sentFps", "boxOutputFps"],
+    "30fps": "PASS 10-min soak (produced 30.0, encoded 29.99+, sent 29.99+, box 29.88+, 0 drops)",
+    "60fps": "PARTIAL - 60.00 not sustainable (display 59.94Hz backlog); stable ceiling 59.94 verified 10-min PASS"
+  },
+  "resultsFiles": [
+    "results/4k30_hdr.json",
+    "results/4k60_hdr.json",
+    "results/59.94fps_hdr.json",
+    "results/zero_copy_regression.json"
+  ],
+  "docs": [
+    "docs/autonomous/25_qsv_zero_copy.md",
+    "docs/autonomous/26_4k30_hdr.md",
+    "docs/autonomous/27_4k60_hdr.md",
+    "docs/autonomous/28_zero_copy_regression.md",
+    "docs/autonomous/99_final_status.md",
+    "docs/autonomous/compat_qsv_runtime_quirks.md"
+  ]
+}

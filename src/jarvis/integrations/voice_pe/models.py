@@ -405,6 +405,20 @@ class VoicePEConfig:
     button_actions: Dict[str, str] = field(default_factory=dict)
     #: Persisted per-device metadata keyed by MAC address.
     devices: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: Active audio profile (see audio_pipeline.spec.md). Per-device
+    #: overrides live in the device metadata under ``profile``.
+    profile: str = "auto"
+    #: Speech-aware post normalizer (per-device gain stage in the pump).
+    normalizer_enabled: bool = False
+    normalizer_target_db: float = -28.0
+    normalizer_max_gain_db: float = 9.0
+    normalizer_attack_db_per_s: float = 3.0
+    normalizer_limiter_db: float = -1.0
+    #: Persisted calibration evidence keyed by MAC (see calibration.py).
+    calibrations: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    #: Seconds of zero satellite audio before the run is loudly flagged
+    #: (``0`` disables the per-run no-audio watchdog).
+    no_audio_warn_s: float = 6.0
 
 
 @dataclass

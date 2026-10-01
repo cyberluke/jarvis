@@ -750,6 +750,125 @@ def enumerate_endpoints(flow: int = 0) -> list[dict]:
     return out
 
 
+def _headset_family_name(friendly: str) -> str:
+    """``Headset Microphone (Plantronics Blackwire 3220 Series)`` → product family."""
+    import re
+    name = str(friendly or "").strip()
+    m = re.search(r"\(([^)]+)\)", name)
+    if m:
+        return m.group(1).strip()
+    for prefix in (
+        "headset microphone", "headset earphone", "headset",
+        "headphones", "microphone", "speakers",
+    ):
+        if name.casefold().startswith(prefix):
+            return name[len(prefix):].strip(" -") or name
+    return name
+
+
+def list_headset_families() -> list[dict]:
+    """USB headset families that expose BOTH a capture and a render endpoint."""
+    skip = ("sidetone", "stereo mix", "what u hear", "wave")
+    families: dict[str, dict] = {}
+    for e in enumerate_endpoints():
+        name = str(e.get("friendly_name") or "")
+        low = name.casefold()
+        if any(s in low for s in skip):
+            continue
+        family = _headset_family_name(name)
+        if not family:
+            continue
+        key = family.casefold()
+        slot = families.setdefault(key, {"family": family, "caps": [], "rends": []})
+        flow = int(e.get("data_flow") or 0)
+        if flow == 2:
+            slot["caps"].append(e)
+        elif flow == 3:
+            slot["rends"].append(e)
+    out = []
+    for slot in families.values():
+        if not slot["caps"] or not slot["rends"]:
+            continue
+        try:
+            pair = resolve_headset_pair(slot["family"])
+        except Exception:
+            continue
+        out.append({
+            "family": slot["family"],
+            "capture_name": pair["capture_name"],
+            "render_name": pair["render_name"],
+            "capture_endpoint_id": pair["capture_endpoint_id"],
+            "render_endpoint_id": pair["render_endpoint_id"],
+        })
+    out.sort(key=lambda r: r["family"].casefold())
+    return out
+
+
+def resolve_headset_pair(match: str = "Plantronics") -> dict:
+    """Pick one USB headset family for BOTH capture and render.
+
+    Google Meet / Microsoft Teams do not play through the Windows
+    multimedia default speaker. Interview Coach must loop back the
+    same headset the call uses (typically the Communications device),
+    not SAMSUNG / JBL / RME.
+
+    Skips Sidetone / stereo-mix style endpoints. Raises if the family
+    is not present as a capture+render pair — no silent speaker fallback.
+    """
+    needle = (match or "Plantronics").strip().casefold()
+    if not needle:
+        needle = "plantronics"
+    skip = ("sidetone", "stereo mix", "what u hear", "wave")
+    caps: list[dict] = []
+    rends: list[dict] = []
+    for e in enumerate_endpoints():
+        name = str(e.get("friendly_name") or "")
+        low = name.casefold()
+        if needle not in low:
+            continue
+        if any(s in low for s in skip):
+            continue
+        flow = int(e.get("data_flow") or 0)
+        if flow == 2:
+            caps.append(e)
+        elif flow == 3:
+            rends.append(e)
+
+    def _score_cap(e: dict) -> tuple:
+        n = str(e.get("friendly_name") or "").casefold()
+        return (
+            0 if "microphone" in n else 1,
+            0 if int(e.get("default_communications") or 0) else 1,
+            0 if int(e.get("default_multimedia") or 0) else 1,
+        )
+
+    def _score_ren(e: dict) -> tuple:
+        n = str(e.get("friendly_name") or "").casefold()
+        kind = 0 if ("earphone" in n or "headphone" in n or "headset" in n) else 1
+        return (
+            kind,
+            0 if int(e.get("default_communications") or 0) else 1,
+            0 if int(e.get("default_multimedia") or 0) else 1,
+        )
+
+    if not caps or not rends:
+        raise RuntimeError(
+            f"interview headset {match!r} not found as a capture+render pair "
+            f"(capture={len(caps)} render={len(rends)}). "
+            "Plug in the Plantronics USB headset. Meet/Teams audio will not "
+            "be on the default speaker."
+        )
+    cap = sorted(caps, key=_score_cap)[0]
+    ren = sorted(rends, key=_score_ren)[0]
+    return {
+        "match": match,
+        "capture_endpoint_id": cap["id"],
+        "capture_name": cap["friendly_name"],
+        "render_endpoint_id": ren["id"],
+        "render_name": ren["friendly_name"],
+    }
+
+
 def endpoint_lines(flow: int = 0) -> list[str]:
     """One-line summaries for the Settings UI."""
     lines: list[str] = []

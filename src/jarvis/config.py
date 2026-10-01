@@ -465,6 +465,10 @@ class Settings:
     ollama_chat_model: str
     llm_chat_timeout_sec: float
     llm_tools_timeout_sec: float
+    #: Interactive enhancement budget (seconds) for media AUTO (P5.3): a
+    #: PLAY_NOW cast falls back to the original when the predicted
+    #: enhancement cost exceeds this. Not scattered hardcodes.
+    interactive_enhancement_budget_sec: float
     #: Completion-token budget for chat replies (reasoning models need room
     #: for hidden reasoning + the visible answer). See get_default_config.
     llm_max_tokens: int
@@ -514,6 +518,14 @@ class Settings:
     voice_render_endpoint_id: str
     #: ``console`` | ``multimedia`` | ``communications`` role for defaults.
     voice_endpoint_role: str
+    #: Interview / Meet / Teams: pin capture+render to this USB headset
+    #: family instead of the Windows default speaker (Meet/Teams do not
+    #: use the default playback device). Empty = "Plantronics".
+    interview_headset_match: str
+    #: Optional explicit MMDevice IDs. When both are set they override
+    #: ``interview_headset_match``. Either empty = resolve from the family.
+    interview_capture_endpoint_id: str
+    interview_render_endpoint_id: str
     #: ``mono``|``left``|``right``|``channel_index``|``stereo_average``.
     voice_capture_channel_mode: str
     voice_capture_channel_index: int
@@ -734,10 +746,19 @@ class Settings:
 
     # Web Search
     web_search_enabled: bool
-    # Optional Brave Search API key. When set, Brave is used as the primary
-    # fallback when DuckDuckGo is rate-limited or returns no usable content.
-    # Empty string means "not configured" — the tool then falls through to
-    # the always-on Wikipedia fallback. Free tier is 2,000 queries/month.
+    # Local SearXNG meta-search. When enabled (default), the tool prefers the
+    # user's own instance (JSON output) over the Brave API as the fallback
+    # when DuckDuckGo is rate-limited or returns no usable content. No key,
+    # no external egress beyond the engines SearXNG itself aggregates.
+    searxng_enabled: bool
+    # Base URL of the local SearXNG instance; the instance must have the JSON
+    # output format enabled. Empty string means http://127.0.0.1:8080.
+    searxng_base_url: str
+    # Optional Brave Search API key. When set AND SearXNG is off or
+    # unreachable, Brave is used as the fallback when DuckDuckGo is
+    # rate-limited or returns no usable content. Empty string means "not
+    # configured" — the tool then falls through to the always-on Wikipedia
+    # fallback. Free tier is 2,000 queries/month.
     brave_search_api_key: str
     # Zero-config Wikipedia fallback toggle. When True (default), the tool
     # queries Wikipedia's REST summary API as a last resort before giving up
@@ -801,6 +822,8 @@ class Settings:
     #: Explicit minimal throughput from a real streamed warm-up. An unknown
     #: accelerator is only a miss when the latency also fails this limit.
     voice_pe_llm_min_tokens_per_s: float
+    #: Seconds of zero satellite audio before a run is loudly flagged (0 off).
+    voice_pe_no_audio_warn_s: float
 
     # Windows virtual microphone (Toustovač Clean Microphone, WDK WaveRT).
     # Master switch for the CleanAudioBus daemon publisher.
@@ -877,6 +900,19 @@ class Settings:
     everywhere_debug: bool = False
     #: Saved prompt library (first-class, local JSON persistence).
     everywhere_prompt_library: list = None
+    #: Async task pipeline: bounded parallel workers for Everywhere actions.
+    #: Actions queue instantly and run off the pipe thread, so the overlay
+    #: never blocks on a slow model; completed tasks land in the queue UI.
+    everywhere_max_concurrent_tasks: int = 3
+    #: Transient-failure retries per task (MODEL_UNAVAILABLE / timeouts).
+    everywhere_max_retries: int = 2
+    #: Result cache: same action + selection hash + model + language within
+    #: TTL is reused instead of re-running the model (memory only).
+    everywhere_cache_enabled: bool = True
+    everywhere_cache_max_entries: int = 200
+    everywhere_cache_ttl_sec: float = 86400.0
+    #: Completed-task history kept for the queue overlay (bounded).
+    everywhere_history_max: int = 50
 
     # Local model cache root for Whisper weights (e.g. D:\_MODELS on the
     # preflight host; empty = HF default cache).
@@ -1199,6 +1235,7 @@ def get_default_config() -> Dict[str, Any]:
         "ollama_chat_model": _default_chat_model(),
         "llm_chat_timeout_sec": 180.0,
         "llm_tools_timeout_sec": 300.0,
+        "interactive_enhancement_budget_sec": 10.0,
         # Completion-token budget for chat replies. Reasoning models (gemma4,
         # qwen3-thinking, etc.) spend tokens on hidden reasoning BEFORE the
         # visible answer, so a small budget truncates the answer to a fragment
@@ -1252,6 +1289,9 @@ def get_default_config() -> Dict[str, Any]:
         "voice_capture_endpoint_id": "",
         "voice_render_endpoint_id": "",
         "voice_endpoint_role": "multimedia",
+        "interview_headset_match": "Plantronics",
+        "interview_capture_endpoint_id": "",
+        "interview_render_endpoint_id": "",
         "voice_capture_channel_mode": "stereo_average",
         "voice_capture_channel_index": 0,
         "voice_pe_dsp_mode": "host_raw_aec",
@@ -1475,6 +1515,11 @@ def get_default_config() -> Dict[str, Any]:
 
         # Web Search
         "web_search_enabled": True,
+        # Local SearXNG meta-search is the default search fallback (no key,
+        # runs on the user's own machine). JSON output must be enabled in the
+        # instance settings.
+        "searxng_enabled": True,
+        "searxng_base_url": "http://127.0.0.1:8080",
         "brave_search_api_key": "",
         "wikipedia_fallback_enabled": True,
 
@@ -1514,7 +1559,7 @@ def get_default_config() -> Dict[str, Any]:
         "voice_pe_led_rgb": [0.55, 0.0, 1.0],
         "voice_pe_devices": {},
         "voice_pe_button_actions": {
-            "double_press": "toggle_overlay",
+            "double_press": "commit_utterance",
             "triple_press": "open_command_palette",
             "long_press": "cancel_current_agent_run",
             "easter_egg_press": "toaster_easter_egg",
@@ -1524,6 +1569,25 @@ def get_default_config() -> Dict[str, Any]:
         # Throughput the real streamed warm-up must exceed for that model to
         # count in a campaign. Explicit and configurable per profile.
         "voice_pe_llm_min_tokens_per_s": 5.0,
+# Seconds of zero satellite audio before a run is loudly flagged
+        # (0 disables the per-run no-audio watchdog).
+        "voice_pe_no_audio_warn_s": 6.0,
+        # Voice PE WebAudio bridge (loopback, token + explicit origins).
+        "voice_pe_bridge_enabled": False,
+        "voice_pe_bridge_port": 27123,
+        "voice_pe_bridge_token": "",
+        "voice_pe_bridge_allowed_origins": ["https://v271.cz"],
+        "voice_pe_bridge_max_clients": 1,
+        "voice_pe_bridge_buffer_frames": 200,
+        "voice_pe_bridge_device": "",
+        # Audio pipeline: profile + speech-aware normalizer (see the spec).
+        "voice_pe_profile": "auto",
+        "voice_pe_normalizer_enabled": False,
+        "voice_pe_normalizer_target_db": -28.0,
+        "voice_pe_normalizer_max_gain_db": 9.0,
+        "voice_pe_normalizer_attack_db_per_s": 3.0,
+        "voice_pe_normalizer_limiter_db": -1.0,
+        "voice_pe_calibrations": {},
 
         # Windows virtual microphone (Toustovač Clean Microphone). The bus
         # exists only while enabled; one canonical source is published at a
@@ -1702,6 +1766,9 @@ def load_settings() -> Settings:
     voice_input_backend = _as_backend(merged.get("voice_input_backend"))
     voice_capture_endpoint_id = str(merged.get("voice_capture_endpoint_id", "") or "").strip()
     voice_render_endpoint_id = str(merged.get("voice_render_endpoint_id", "") or "").strip()
+    interview_headset_match = str(merged.get("interview_headset_match", "Plantronics") or "Plantronics").strip() or "Plantronics"
+    interview_capture_endpoint_id = str(merged.get("interview_capture_endpoint_id", "") or "").strip()
+    interview_render_endpoint_id = str(merged.get("interview_render_endpoint_id", "") or "").strip()
     voice_endpoint_role = _as_role(merged.get("voice_endpoint_role"))
     voice_capture_channel_mode = _as_channel_mode(merged.get("voice_capture_channel_mode"))
     voice_capture_channel_index = max(0, int(merged.get("voice_capture_channel_index", 0)))
@@ -1884,6 +1951,10 @@ def load_settings() -> Settings:
     location_auto_detect = bool(merged.get("location_auto_detect", True))
     location_cgnat_resolve_public_ip = bool(merged.get("location_cgnat_resolve_public_ip", True))
     web_search_enabled = bool(merged.get("web_search_enabled", True))
+    searxng_enabled = bool(merged.get("searxng_enabled", True))
+    searxng_base_url = str(
+        merged.get("searxng_base_url", "") or ""
+    ).strip() or "http://127.0.0.1:8080"
     brave_search_api_key = str(merged.get("brave_search_api_key", "") or "").strip()
     wikipedia_fallback_enabled = bool(merged.get("wikipedia_fallback_enabled", True))
     dictation_enabled = bool(merged.get("dictation_enabled", True))
@@ -1985,6 +2056,82 @@ def load_settings() -> Settings:
     voice_pe_llm_min_tokens_per_s = max(
         0.1, _voice_pe_float(merged.get("voice_pe_llm_min_tokens_per_s"), 5.0)
     )
+    voice_pe_no_audio_warn_s = max(
+        0.0, _voice_pe_float(merged.get("voice_pe_no_audio_warn_s"), 6.0)
+    )
+    # Voice PE WebAudio bridge: loopback-only, token-gated, explicit origins.
+    voice_pe_bridge_enabled = bool(merged.get("voice_pe_bridge_enabled", False))
+    try:
+        voice_pe_bridge_port = int(merged.get("voice_pe_bridge_port", 27123))
+    except (TypeError, ValueError):
+        voice_pe_bridge_port = 27123
+    # ``0`` means an ephemeral port (tests); negative or oversized ports are
+    # invalid and fall back to the default.
+    if voice_pe_bridge_port < 0 or voice_pe_bridge_port > 65535:
+        voice_pe_bridge_port = 27123
+    voice_pe_bridge_token = str(merged.get("voice_pe_bridge_token", "") or "").strip()
+    # The token also honours JARVIS_VOICE_PE_BRIDGE_TOKEN; the config file wins.
+    if not voice_pe_bridge_token:
+        voice_pe_bridge_token = str(
+            os.environ.get("JARVIS_VOICE_PE_BRIDGE_TOKEN", "") or ""
+        ).strip()
+    raw_bridge_origins = merged.get("voice_pe_bridge_allowed_origins")
+    voice_pe_bridge_allowed_origins = (
+        [str(o) for o in raw_bridge_origins]
+        if isinstance(raw_bridge_origins, list)
+        else ["https://v271.cz"]
+    )
+    try:
+        voice_pe_bridge_max_clients = max(
+            1, int(merged.get("voice_pe_bridge_max_clients", 1) or 1)
+        )
+    except (TypeError, ValueError):
+        voice_pe_bridge_max_clients = 1
+    try:
+        voice_pe_bridge_buffer_frames = max(
+            1, int(merged.get("voice_pe_bridge_buffer_frames", 200) or 200)
+        )
+    except (TypeError, ValueError):
+        voice_pe_bridge_buffer_frames = 200
+    voice_pe_bridge_device = str(merged.get("voice_pe_bridge_device", "") or "").strip()
+    # Audio pipeline: profile + speech-aware normalizer (audio_pipeline.spec.md).
+    voice_pe_profile = str(merged.get("voice_pe_profile", "auto") or "auto").strip().lower()
+    if voice_pe_profile not in ("auto", "desk", "room", "far_field", "meeting"):
+        voice_pe_profile = "auto"
+    voice_pe_normalizer_enabled = bool(merged.get("voice_pe_normalizer_enabled", False))
+    try:
+        voice_pe_normalizer_target_db = float(
+            merged.get("voice_pe_normalizer_target_db", -28.0)
+        )
+    except (TypeError, ValueError):
+        voice_pe_normalizer_target_db = -28.0
+    if not (-40.0 <= voice_pe_normalizer_target_db <= -12.0):
+        voice_pe_normalizer_target_db = -28.0
+    try:
+        voice_pe_normalizer_max_gain_db = float(
+            merged.get("voice_pe_normalizer_max_gain_db", 9.0)
+        )
+    except (TypeError, ValueError):
+        voice_pe_normalizer_max_gain_db = 9.0
+    if not (0.0 <= voice_pe_normalizer_max_gain_db <= 18.0):
+        voice_pe_normalizer_max_gain_db = 9.0
+    try:
+        voice_pe_normalizer_attack_db_per_s = float(
+            merged.get("voice_pe_normalizer_attack_db_per_s", 3.0)
+        )
+    except (TypeError, ValueError):
+        voice_pe_normalizer_attack_db_per_s = 3.0
+    if not (0.1 <= voice_pe_normalizer_attack_db_per_s <= 24.0):
+        voice_pe_normalizer_attack_db_per_s = 3.0
+    try:
+        voice_pe_normalizer_limiter_db = float(
+            merged.get("voice_pe_normalizer_limiter_db", -1.0)
+        )
+    except (TypeError, ValueError):
+        voice_pe_normalizer_limiter_db = -1.0
+    if not (-6.0 <= voice_pe_normalizer_limiter_db <= 0.0):
+        voice_pe_normalizer_limiter_db = -1.0
+    voice_pe_calibrations = _ensure_dict(merged.get("voice_pe_calibrations"))
     # Windows virtual microphone (Toustovač Clean Microphone). Source is the
     # canonical ``local`` / ``voice_pe:<mac>`` / empty string, normalized so
     # the publisher can compare it against ``CleanAudioFrame.source_id`` 1:1.
@@ -2223,6 +2370,8 @@ def load_settings() -> Settings:
     llm_chat_timeout_sec = float(merged.get("llm_chat_timeout_sec", 180.0))
     llm_max_tokens = max(256, int(merged.get("llm_max_tokens", 8192)))
     llm_tools_timeout_sec = float(merged.get("llm_tools_timeout_sec", 300.0))
+    interactive_enhancement_budget_sec = max(
+        1.0, float(merged.get("interactive_enhancement_budget_sec", 10.0)))
     llm_digest_timeout_sec = float(merged.get("llm_digest_timeout_sec", 12.0))
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
@@ -2247,6 +2396,7 @@ def load_settings() -> Settings:
         llm_chat_timeout_sec=llm_chat_timeout_sec,
         llm_max_tokens=llm_max_tokens,
         llm_tools_timeout_sec=llm_tools_timeout_sec,
+        interactive_enhancement_budget_sec=interactive_enhancement_budget_sec,
         llm_digest_timeout_sec=llm_digest_timeout_sec,
         llm_embedding_timeout_sec=llm_embedding_timeout_sec,
         llm_profile_select_timeout_sec=llm_profile_select_timeout_sec,
@@ -2284,6 +2434,9 @@ def load_settings() -> Settings:
         voice_input_backend=voice_input_backend,
         voice_capture_endpoint_id=voice_capture_endpoint_id,
         voice_render_endpoint_id=voice_render_endpoint_id,
+        interview_headset_match=interview_headset_match,
+        interview_capture_endpoint_id=interview_capture_endpoint_id,
+        interview_render_endpoint_id=interview_render_endpoint_id,
         voice_endpoint_role=voice_endpoint_role,
         voice_capture_channel_mode=voice_capture_channel_mode,
         voice_capture_channel_index=voice_capture_channel_index,
@@ -2413,6 +2566,8 @@ def load_settings() -> Settings:
 
         # Web Search
         web_search_enabled=web_search_enabled,
+        searxng_enabled=searxng_enabled,
+        searxng_base_url=searxng_base_url,
         brave_search_api_key=brave_search_api_key,
         wikipedia_fallback_enabled=wikipedia_fallback_enabled,
 
@@ -2449,6 +2604,21 @@ def load_settings() -> Settings:
         voice_pe_button_actions=voice_pe_button_actions,
         voice_pe_hardware_timeout_s=voice_pe_hardware_timeout_s,
         voice_pe_llm_min_tokens_per_s=voice_pe_llm_min_tokens_per_s,
+voice_pe_no_audio_warn_s=voice_pe_no_audio_warn_s,
+        voice_pe_bridge_enabled=voice_pe_bridge_enabled,
+        voice_pe_bridge_port=voice_pe_bridge_port,
+        voice_pe_bridge_token=voice_pe_bridge_token,
+        voice_pe_bridge_allowed_origins=voice_pe_bridge_allowed_origins,
+        voice_pe_bridge_max_clients=voice_pe_bridge_max_clients,
+        voice_pe_bridge_buffer_frames=voice_pe_bridge_buffer_frames,
+        voice_pe_bridge_device=voice_pe_bridge_device,
+        voice_pe_profile=voice_pe_profile,
+        voice_pe_normalizer_enabled=voice_pe_normalizer_enabled,
+        voice_pe_normalizer_target_db=voice_pe_normalizer_target_db,
+        voice_pe_normalizer_max_gain_db=voice_pe_normalizer_max_gain_db,
+        voice_pe_normalizer_attack_db_per_s=voice_pe_normalizer_attack_db_per_s,
+        voice_pe_normalizer_limiter_db=voice_pe_normalizer_limiter_db,
+        voice_pe_calibrations=voice_pe_calibrations,
 
         # Windows virtual microphone (Toustovač Clean Microphone)
         virtual_microphone_enabled=virtual_microphone_enabled,

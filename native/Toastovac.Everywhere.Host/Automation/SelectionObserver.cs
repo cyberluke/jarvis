@@ -131,7 +131,7 @@ public sealed class SelectionObserver
             ["source_kind"] = SourceKinds.UiaText,
             ["provider_id"] = "uia",
             ["text"] = text,
-            ["text_hash"] = TextHash(text),
+            ["text_hash"] = Hash(text),
             ["hwnd"] = element.Current.NativeWindowHandle,
             ["process_id"] = processId,
             ["process_name"] = processName,
@@ -147,7 +147,7 @@ public sealed class SelectionObserver
             {
                 ["automation_id"] = element.Current.AutomationId,
                 ["control_type"] = element.Current.ControlType.Id,
-                ["selected_text_hash"] = TextHash(text),
+                ["selected_text_hash"] = Hash(text),
                 ["is_password"] = isPassword,
             },
         };
@@ -180,7 +180,9 @@ public sealed class SelectionObserver
         }
     }
 
-    private static string TextHash(string text)
+    /// <summary>Lowercase-hex SHA-256 of the UTF-8 text — the same token the
+    /// Python broker computes, so hashes compare equal across the pipe.</summary>
+    public static string Hash(string text)
     {
         using var sha = System.Security.Cryptography.SHA256.Create();
         var bytes = sha.ComputeHash(

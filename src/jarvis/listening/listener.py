@@ -81,6 +81,7 @@ from .transcript_postprocessor import (
     correct_transcript,
     format_correction_event,
 )
+from .fasterwhisper_worker import SttWorkerClient
 from .intent_judge import (
     IntentJudge,
     _is_low_power_mode_enabled,
@@ -1259,6 +1260,14 @@ class VoiceListener(threading.Thread):
             except Exception:
                 pass
             self._ov_worker = None
+        # Terminate the faster-whisper STT worker (own process) the same way.
+        stt = getattr(self, "model", None)
+        if isinstance(stt, SttWorkerClient):
+            try:
+                stt.shutdown()
+            except Exception:
+                pass
+            self.model = None
 
     def _start_thinking_tune(self) -> None:
         """Start the thinking tune when processing a query."""
@@ -3849,200 +3858,38 @@ class VoiceListener(threading.Thread):
                         print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
                     return
         else:
-            # faster-whisper backend
+            # faster-whisper backend — STT runs in an isolated worker
+            # process (its own GIL), so ctranslate2 inference and its Python
+            # glue never compete with the daemon's other threads (Everywhere
+            # broker, pipe workers, UI, TTS) for the GIL. The worker loads
+            # the model with the same device/compute fallback ladder and
+            # serves transcribe requests over JSON lines; a load failure
+            # here fails closed (voice input off), exactly like an
+            # in-process load failure.
             if not FASTER_WHISPER_AVAILABLE:
                 debug_log("faster-whisper not available", "voice")
                 print("  ❌ faster-whisper not available. Install with: pip install faster-whisper", flush=True)
                 return
 
-            device = getattr(self.cfg, "whisper_device", "auto")
-            # Local-first HF cache root (preflight host keeps pre-placed
-            # weights under D:\_MODELS; empty = HF default cache). Passed to
-            # every faster-whisper constructor below.
-            _download_root = getattr(self.cfg, "whisper_cache_dir", "") or None
-
-            def _whisper_kwargs():
-                kw = {}
-                if _download_root:
-                    kw["download_root"] = _download_root
-                return kw
-            compute = getattr(self.cfg, "whisper_compute_type", "int8")
-
-            # On Windows, probe for CUDA runtime libraries before trying to
-            # use them. faster-whisper/CTranslate2 lazily loads cuBLAS and
-            # cuDNN during transcription, so without this check a model
-            # that loaded fine on cuda will crash on the first audio chunk.
-            resolved_device, missing_libs = _probe_windows_cuda_libraries(device)
-            if missing_libs:
-                _print_cuda_unavailable_hint(missing_libs)
-            device = resolved_device
-
-            # Build list of (device, compute_type) combinations to try
-            # This handles both compute type fallbacks and CUDA -> CPU fallbacks
-            configs_to_try = []
-
-            # Start with preferred config
-            compute_types = [compute]
-            if compute == "int8":
-                compute_types.extend(["float16", "float32"])
-            elif compute == "float16":
-                compute_types.append("float32")
-
-            # Add preferred device with all compute types
-            for ct in compute_types:
-                configs_to_try.append((device, ct))
-
-            # If device is "auto" or "cuda", add CPU fallback configs
-            # This handles Windows without CUDA libraries
-            if device in ("auto", "cuda"):
-                for ct in compute_types:
-                    configs_to_try.append(("cpu", ct))
-
-            last_error = None
-            used_device = device
-            used_compute = compute
-            for try_device, try_compute in configs_to_try:
-                try:
-                    cpu_threads = (os.cpu_count() or 4) if try_device in ("cpu", "auto") else 0
-                    print(f"     🎤 Loading Whisper '{model_name}' (device={try_device}, compute={try_compute})...", flush=True)
-                    self.model = WhisperModel(
-                        model_name, device=try_device, compute_type=try_compute,
-                        cpu_threads=cpu_threads, **_whisper_kwargs(),
-                    )
-                    self._apply_whisper_load_success(
-                        model_name, try_device, try_compute,
-                        device, compute, cpu_threads,
-                    )
-                    used_device = try_device
-                    used_compute = try_compute
-                    last_error = None
-                    break
-                except Exception as e:
-                    last_error = e
-                    error_str = str(e).lower()
-
-                    # Check if this is a CUDA/GPU-related error that we should fall back from
-                    is_cuda_error = any(x in error_str for x in [
-                        "cuda", "cublas", "cudnn", "gpu", "nvidia",
-                        ".dll is not found", "library", "ctypes"
-                    ])
-                    is_compute_error = any(x in error_str for x in [
-                        "compute type", "int8", "float16"
-                    ])
-
-                    if is_cuda_error or is_compute_error:
-                        debug_log(f"config ({try_device}, {try_compute}) failed, trying fallback: {e}", "voice")
-                        continue
-
-                    # Check for corrupted model cache (e.g. interrupted download)
-                    is_corrupted_cache = "unable to open file" in error_str
-
-                    if is_corrupted_cache:
-                        debug_log(f"detected corrupted Whisper model cache: {e}", "voice")
-                        print("  ⚠️  Whisper model cache appears corrupted, attempting recovery...", flush=True)
-
-                        cache_cleared = _clear_corrupted_whisper_cache(str(e))
-                        if cache_cleared:
-                            try:
-                                print(f"     🎤 Re-downloading Whisper '{model_name}'...", flush=True)
-                                self.model = WhisperModel(
-                                    model_name, device=try_device, compute_type=try_compute,
-                                    cpu_threads=cpu_threads, **_whisper_kwargs(),
-                                )
-                                self._apply_whisper_load_success(
-                                    model_name, try_device, try_compute,
-                                    device, compute, cpu_threads,
-                                    context="recovered",
-                                )
-                                used_device = try_device
-                                used_compute = try_compute
-                                last_error = None
-                                break
-                            except Exception as retry_e:
-                                debug_log(f"retry after cache clear also failed: {retry_e}", "voice")
-                                print(f"  ❌ Failed to load Whisper model after cache recovery: {retry_e}", flush=True)
-                                debug_log("trying next device/compute fallback config", "voice")
-                                continue
-                        else:
-                            debug_log("could not clear corrupted cache automatically", "voice")
-                            print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
-                            print("  💡 Try manually deleting the Whisper model cache directory and restarting", flush=True)
-                            continue
-                    # Check for rate limiting (HTTP 429) — check string and response status code
-                    # (HfHubHTTPError may carry the status on .response without "429" in str(e))
-                    is_rate_limited = (
-                        any(x in error_str for x in ["429", "too many requests", "rate limit"])
-                        or getattr(getattr(e, "response", None), "status_code", None) == 429
-                    )
-
-                    if is_rate_limited:
-                        _max_retries = 4
-                        _backoff = 2
-                        debug_log(f"rate limited loading Whisper model: {e}", "voice")
-                        retry_succeeded = False
-                        for retry_num in range(1, _max_retries + 1):
-                            wait = _backoff ** retry_num
-                            print(f"  ⏳ Rate limited by HuggingFace, retrying in {wait}s ({retry_num}/{_max_retries})...", flush=True)
-                            time.sleep(wait)
-                            try:
-                                self.model = WhisperModel(
-                                    model_name, device=try_device, compute_type=try_compute,
-                                    cpu_threads=cpu_threads, **_whisper_kwargs(),
-                                )
-                                self._apply_whisper_load_success(
-                                    model_name, try_device, try_compute,
-                                    device, compute, cpu_threads,
-                                    context="rate-limit retry",
-                                )
-                                used_device = try_device
-                                used_compute = try_compute
-                                last_error = None
-                                retry_succeeded = True
-                                break
-                            except Exception as retry_e:
-                                debug_log(f"rate-limit retry {retry_num} failed: {retry_e}", "voice")
-                                last_error = retry_e
-                        if retry_succeeded:
-                            break
-                        debug_log(f"gave up after {_max_retries} rate-limit retries", "voice")
-                        print(f"  ❌ Failed to load Whisper model after {_max_retries} retries: {last_error}", flush=True)
-                        print("  💡 HuggingFace is rate limiting downloads. Please wait a few minutes and restart.", flush=True)
-                        return
-                    else:
-                        # For other errors (model not found, etc.), don't try fallbacks
-                        debug_log(f"failed to initialise faster-whisper: {e}", "voice")
-                        print(f"  ❌ Failed to load Whisper model: {e}", flush=True)
-                        return
-
-            if last_error is not None:
-                debug_log(f"failed to initialise faster-whisper with any config: {last_error}", "voice")
-                print(f"  ❌ Failed to load Whisper model: {last_error}", flush=True)
+            self._transcribe_kwargs = dict(FASTER_WHISPER_TRANSCRIBE_KWARGS)
+            self._asr_version = _asr_backend_version("faster-whisper")
+            self.model = SttWorkerClient(
+                cfg=self.cfg,
+                log=lambda msg: debug_log(msg, "voice"),
+            )
+            print("  🎤 Starting Whisper worker (isolated process)...", flush=True)
+            if not self.model.start():
+                print("  ❌ Failed to initialise the Whisper worker", flush=True)
+                self.model = None
                 return
-
-            # Warm up faster-whisper so the first real utterance doesn't pay
-            # the cold-decode cost. Use low-amplitude noise rather than pure
-            # silence — silence trips faster-whisper's no-speech short-circuit
-            # and the decoder never actually runs. Mirror the real transcribe
-            # parameters so beam search, language detection, and the timestamp
-            # path are all exercised here instead of on the user's first word.
-            if np is not None and self.model is not None:
-                try:
-                    rng = np.random.default_rng(0)
-                    warmup_audio = rng.standard_normal(self._samplerate).astype(np.float32) * 0.01
-                    try:
-                        segments_iter, _ = self.model.transcribe(
-                            warmup_audio,
-                            language=self._whisper_language_code(),
-                            **self._transcribe_kwargs,
-                        )
-                    except TypeError:
-                        segments_iter, _ = self.model.transcribe(
-                            warmup_audio, language=self._whisper_language_code())
-                    for _ in segments_iter:
-                        pass
-                    debug_log("faster-whisper warmup transcription complete", "voice")
-                except Exception as e:
-                    debug_log(f"faster-whisper warmup failed: {e}", "voice")
+            self._whisper_device = self.model.device or "cpu"
+            debug_log(
+                f"faster-whisper worker ready: "
+                f"model={self.model.model_name} "
+                f"device={self.model.device} compute={self.model.compute} "
+                f"version={self._asr_version or '-'}",
+                "voice",
+            )
 
         # Wait for LLM warmups before announcing "Listening!" so the first
         # engagement is responsive. A single 60s budget is shared across
@@ -5845,56 +5692,75 @@ class VoiceListener(threading.Thread):
                 transcript=text,
             )
 
-            # A judge failure never silently admits.
+# A judge timeout/unavailable is explicit but must not drop a
+            # high-confidence Whisper transcript. Hunspell has already repaired
+            # the lexical issues (``text`` is the corrected form), so a minor
+            # misspelling count must not turn an auxiliary LLM failure into a
+            # dropped utterance. That is the configured degrade path (keep
+            # original + flag), not a silent model fallback; it also skips the
+            # recovery loop, which would only re-judge with the same cold LLM.
+            _g_degraded = False
             if _g_grammar.status != "ok":
-                debug_log(
-                    f"grammar: judge_failed status={_g_grammar.status} lang={_g_lang}; "
-                    f"not admitting transcript", "grammar",
-                )
-                segment["reason"] = "judge_failed"
-                self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
-                return ("filtered", segment)
-
-            # NONSENSE / LIKELY_ASR_NOISE / MALFORMED never reach intent handling.
-            _g_validity = LinguisticValidity(_g_grammar.linguistic_validity)
-            _g_needs_recovery = (
-                _g_grammar.likely_asr_corruption
-                or _g_grammar.correction_type == "semantic"
-                or _g_validity.blocks_intent
-                or _g_grammar.recommendation in ("run_asr_recovery", "redecode")
-            )
-
-            if _g_grammar.valid and not _g_needs_recovery:
-                # Valid original; a safe surface correction is applied, else accept.
-                from .grammar import may_auto_correct
-                if may_auto_correct(
-                    _g_grammar,
-                    auto_correction_threshold=self._grammar_pipeline.auto_threshold,
-                ):
-                    print(f"   ✏️ Grammar fixed: \"{_g_grammar.corrected_text}\"", flush=True)
-                    text = _g_grammar.corrected_text
-            else:
-                # Run the real bounded recovery loop on the retained audio.
-                _g_outcome = self._grammar_pipeline.run_recovery(
-                    _g_input,
-                    audio=audio,
-                    initial_grammar=_g_grammar,
-                    initial_text=text,
-                    redecode_fn=self._redecode_utterance,
-                )
-                if not _g_outcome.admitted:
-                    # redecode_failed / rejected / needs_user_retry / judge_failed:
-                    # do NOT admit the invalid original to intent handling.
+                avg_lp = _g_input.asr.average_logprob
+                confident = avg_lp is None or float(avg_lp) >= -0.7
+                if _g_grammar.status in {"timeout", "unavailable"} and confident:
                     debug_log(
-                        f"grammar: not admitted status={_g_outcome.status.value} "
-                        f"reason={_g_outcome.reason} text={text!r}", "grammar",
+                        f"grammar: judge_degraded status={_g_grammar.status} "
+                        f"lang={_g_lang} admitting_original=true",
+                        "grammar",
                     )
-                    segment["reason"] = f"grammar_{_g_outcome.status.value}"
+                    segment["grammar_degraded"] = _g_grammar.status
+                    _g_degraded = True
+                else:
+                    debug_log(
+                        f"grammar: judge_failed status={_g_grammar.status} lang={_g_lang}; "
+                        f"not admitting transcript", "grammar",
+                    )
+                    segment["reason"] = "judge_failed"
                     self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
                     return ("filtered", segment)
-                if _g_outcome.text != text:
-                    print(f"   🔁 Recovered: \"{_g_outcome.text}\" ({_g_outcome.status.value})", flush=True)
-                    text = _g_outcome.text
+
+            # NONSENSE / LIKELY_ASR_NOISE / MALFORMED never reach intent handling.
+            if not _g_degraded:
+                _g_validity = LinguisticValidity(_g_grammar.linguistic_validity)
+                _g_needs_recovery = (
+                    _g_grammar.likely_asr_corruption
+                    or _g_grammar.correction_type == "semantic"
+                    or _g_validity.blocks_intent
+                    or _g_grammar.recommendation in ("run_asr_recovery", "redecode")
+                )
+
+                if _g_grammar.valid and not _g_needs_recovery:
+                    # Valid original; a safe surface correction is applied, else accept.
+                    from .grammar import may_auto_correct
+                    if may_auto_correct(
+                        _g_grammar,
+                        auto_correction_threshold=self._grammar_pipeline.auto_threshold,
+                    ):
+                        print(f"   ✏️ Grammar fixed: \"{_g_grammar.corrected_text}\"", flush=True)
+                        text = _g_grammar.corrected_text
+                else:
+                    # Run the real bounded recovery loop on the retained audio.
+                    _g_outcome = self._grammar_pipeline.run_recovery(
+                        _g_input,
+                        audio=audio,
+                        initial_grammar=_g_grammar,
+                        initial_text=text,
+                        redecode_fn=self._redecode_utterance,
+                    )
+                    if not _g_outcome.admitted:
+                        # redecode_failed / rejected / needs_user_retry / judge_failed:
+                        # do NOT admit the invalid original to intent handling.
+                        debug_log(
+                            f"grammar: not admitted status={_g_outcome.status.value} "
+                            f"reason={_g_outcome.reason} text={text!r}", "grammar",
+                        )
+                        segment["reason"] = f"grammar_{_g_outcome.status.value}"
+                        self.state_manager.check_hot_window_expiry(self.cfg.voice_debug)
+                        return ("filtered", segment)
+                    if _g_outcome.text != text:
+                        print(f"   🔁 Recovered: \"{_g_outcome.text}\" ({_g_outcome.status.value})", flush=True)
+                        text = _g_outcome.text
 
         # Filter out repetitive hallucinations (e.g., "don't don't don't...")
         if self._is_repetitive_hallucination(text):

@@ -1,0 +1,11 @@
+=== dc_cap ===
+420,12bit
+420,10bit
+420,8bit
+444,12bit
+444,10bit
+444,8bit
+422,12bit
+rgb,12bit
+rgb,10bit
+rgb,8bit

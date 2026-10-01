@@ -284,7 +284,7 @@ confirmed by a read-back of the assistant configuration after the write:
 `wake_words_disabled` is the device's own answer, and a non-empty active list
 closes the generation instead of reporting a ready push-to-talk device. The same
 table gives every published event a built-in handler: `single_press` and
-`long_press` → `cancel_current_agent_run`, `double_press` → `toggle_overlay`,
+`long_press` → `cancel_current_agent_run`, `double_press` → `commit_utterance`,
 `triple_press` → `open_command_palette`, the easter-egg value →
 `toaster_easter_egg`, an unmapped value → `ignore`.
 

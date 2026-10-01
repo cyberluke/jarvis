@@ -1,0 +1,146 @@
+[FRAME]
+media_type=video
+stream_index=0
+key_frame=1
+pts=0
+pts_time=0.000000
+pkt_dts=N/A
+pkt_dts_time=N/A
+best_effort_timestamp=0
+best_effort_timestamp_time=0.000000
+duration=256
+duration_time=0.016667
+pkt_pos=11316
+pkt_size=17442
+width=3840
+height=2160
+crop_top=0
+crop_bottom=0
+crop_left=0
+crop_right=0
+pix_fmt=yuv420p10le
+sample_aspect_ratio=N/A
+pict_type=I
+interlaced_frame=0
+top_field_first=0
+repeat_pict=0
+color_range=tv
+color_space=bt2020nc
+color_primaries=bt2020
+color_transfer=smpte2084
+chroma_location=topleft
+[SIDE_DATA]
+side_data_type=Mastering display metadata
+red_x=34000/50000
+red_y=16000/50000
+green_x=13250/50000
+green_y=34500/50000
+blue_x=7500/50000
+blue_y=3000/50000
+white_point_x=15635/50000
+white_point_y=16450/50000
+min_luminance=5/10000
+max_luminance=10000000/10000
+[/SIDE_DATA]
+[SIDE_DATA]
+side_data_type=Content light level metadata
+max_content=1000
+max_average=400
+[/SIDE_DATA]
+[/FRAME]
+[STREAM]
+index=0
+codec_name=hevc
+codec_long_name=H.265 / HEVC (High Efficiency Video Coding)
+profile=Main 10
+codec_type=video
+codec_tag_string=hvc1
+codec_tag=0x31637668
+width=3840
+height=2160
+coded_width=3840
+coded_height=2160
+closed_captions=0
+film_grain=0
+has_b_frames=2
+sample_aspect_ratio=N/A
+display_aspect_ratio=N/A
+pix_fmt=yuv420p10le
+level=153
+color_range=tv
+color_space=bt2020nc
+color_transfer=smpte2084
+color_primaries=bt2020
+chroma_location=topleft
+field_order=progressive
+refs=1
+view_ids_available=
+view_pos_available=
+id=0x1
+r_frame_rate=60/1
+avg_frame_rate=60/1
+time_base=1/15360
+start_pts=0
+start_time=0.000000
+duration_ts=230400
+duration=15.000000
+bit_rate=336482
+max_bit_rate=N/A
+bits_per_raw_sample=N/A
+nb_frames=900
+nb_read_frames=1
+nb_read_packets=N/A
+extradata_size=162
+DISPOSITION:default=1
+DISPOSITION:dub=0
+DISPOSITION:original=0
+DISPOSITION:comment=0
+DISPOSITION:lyrics=0
+DISPOSITION:karaoke=0
+DISPOSITION:forced=0
+DISPOSITION:hearing_impaired=0
+DISPOSITION:visual_impaired=0
+DISPOSITION:clean_effects=0
+DISPOSITION:attached_pic=0
+DISPOSITION:timed_thumbnails=0
+DISPOSITION:non_diegetic=0
+DISPOSITION:captions=0
+DISPOSITION:descriptions=0
+DISPOSITION:metadata=0
+DISPOSITION:dependent=0
+DISPOSITION:still_image=0
+DISPOSITION:multilayer=0
+TAG:language=und
+TAG:handler_name=VideoHandler
+TAG:vendor_id=[0][0][0][0]
+TAG:encoder=Lavc61.19.101 libx265
+[/STREAM]
+[FORMAT]
+filename=D:\_SATIN_AI\Toastovac\jarvis\android\toastovac-tv\docs\hdmi-probe\hdr10\toastovac_hdr10_4k60.mp4
+nb_streams=1
+nb_programs=0
+nb_stream_groups=0
+format_name=mov,mp4,m4a,3gp,3g2,mj2
+format_long_name=QuickTime / MOV
+start_time=0.000000
+duration=15.000000
+size=642221
+bit_rate=342517
+probe_score=100
+TAG:major_brand=isom
+TAG:minor_version=512
+TAG:compatible_brands=isomiso2mp41
+TAG:encoder=Lavf61.7.100
+[/FORMAT]
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'D:\_SATIN_AI\Toastovac\jarvis\android\toastovac-tv\docs\hdmi-probe\hdr10\toastovac_hdr10_4k60.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2mp41
+    encoder         : Lavf61.7.100
+  Duration: 00:00:15.00, start: 0.000000, bitrate: 342 kb/s
+  Stream #0:0[0x1](und): Video: hevc (Main 10) (hvc1 / 0x31637668), yuv420p10le(tv, bt2020nc/bt2020/smpte2084, progressive), 3840x2160, 336 kb/s, 60 fps, 60 tbr, 15360 tbn (default)
+      Metadata:
+        handler_name    : VideoHandler
+        vendor_id       : [0][0][0][0]
+        encoder         : Lavc61.19.101 libx265

@@ -114,6 +114,68 @@ def get_everywhere_broker():
 
 # Track the spawned native-host process so shutdown can stop it.
 _global_everywhere_host_proc = None
+# Host watchdog: the Everywhere host can crash (WinUI) or be killed; the
+# daemon must notice and respawn it instead of silently losing the overlay.
+_global_everywhere_host_watchdog = None
+_global_everywhere_host_watchdog_stop = None
+
+
+def _start_everywhere_host_watchdog() -> None:
+    """Start the host watchdog thread (no-op when already running)."""
+    global _global_everywhere_host_watchdog, _global_everywhere_host_watchdog_stop
+    if _global_everywhere_host_watchdog is not None:
+        return
+    _global_everywhere_host_watchdog_stop = threading.Event()
+    t = threading.Thread(
+        target=_everywhere_host_watchdog_loop,
+        name="everywhere-host-watchdog", daemon=True)
+    _global_everywhere_host_watchdog = t
+    t.start()
+    debug_log("everywhere host watchdog started", "everywhere")
+
+
+def _stop_everywhere_host_watchdog() -> None:
+    global _global_everywhere_host_watchdog, _global_everywhere_host_watchdog_stop
+    stop_ev = _global_everywhere_host_watchdog_stop
+    if stop_ev is not None:
+        stop_ev.set()
+    t = _global_everywhere_host_watchdog
+    _global_everywhere_host_watchdog = None
+    _global_everywhere_host_watchdog_stop = None
+    if t is not None:
+        t.join(timeout=1.0)
+
+
+def _everywhere_host_watchdog_loop() -> None:
+    """Respawn the Everywhere host when it dies, with capped backoff.
+
+    A dead host currently leaves the overlay gone while the daemon keeps
+    running; the watchdog closes that gap (exponential backoff up to 30 s,
+    giving up silently only while the daemon itself is stopping)."""
+    stop_ev = _global_everywhere_host_watchdog_stop
+    if stop_ev is None:
+        return
+    consecutive_failures = 0
+    while not stop_ev.wait(5.0):
+        global _global_everywhere_host_proc
+        proc = _global_everywhere_host_proc
+        if proc is not None and proc.poll() is None:
+            consecutive_failures = 0
+            continue
+        if proc is not None:
+            code = proc.poll()
+            debug_log(
+                f"everywhere host exited code={code} — respawning",
+                "everywhere")
+        consecutive_failures += 1
+        if consecutive_failures > 20:
+            debug_log("everywhere host watchdog: giving up after repeated "
+                      "failures", "everywhere")
+            break
+        _spawn_everywhere_host()
+        # The new process is not observable through poll() until the next
+        # tick; back off harder after repeated spawn failures.
+        stop_ev.wait(min(2.0 * consecutive_failures, 30.0))
 
 
 def _everywhere_host_exe() -> Optional[str]:
@@ -947,6 +1009,16 @@ def main(smoke_test: bool = False) -> None:
     print("✓ Daemon started", flush=True)
     print(f"🧠 Using chat model: {cfg.llm_chat_model}", flush=True)
     print(f"🎤 Using whisper model: {cfg.whisper_model}", flush=True)
+
+    # Spawn the native Everywhere host early — it only needs cfg and the exe
+    # path, and its hotkeys work independently of the broker pipe. Without
+    # this the toolbar would only exist after the slower voice/STT/TTS init
+    # (~30-60s), so Ctrl+Shift+Space pressed right after launch would fall
+    # through to the focused app. The host reconnects to the broker pipe with
+    # backoff until the broker starts below (the late spawn call is a no-op).
+    if sys.platform == "win32" and bool(getattr(cfg, "everywhere_enabled", True)):
+        _spawn_everywhere_host()
+        _start_everywhere_host_watchdog()
     try:
         from .config import hardware_report
         _hw = hardware_report(cfg)
@@ -1285,6 +1357,38 @@ def main(smoke_test: bool = False) -> None:
         debug_log(f"voice_pe init failed (non-fatal): {e}", "voice")
         print(f"  ⚠ Voice PE not available: {e}", flush=True)
 
+# Voice PE WebAudio bridge (voice_pe_bridge.spec.md). Streams the
+    # satellite microphone to the V271 PWA composer over a loopback
+    # WebSocket. Needs an explicit token; without one it stays off.
+    try:
+        if bool(getattr(cfg, "voice_pe_bridge_enabled", False)):
+            from .voice_pe_bridge import VoicePEBridgeServer
+
+            _global_voice_pe_bridge = VoicePEBridgeServer(
+                cfg,
+                _global_voice_pe_manager,
+                device_key=str(getattr(cfg, "voice_pe_bridge_device", "") or ""),
+            )
+            if _global_voice_pe_bridge.start():
+                print(
+                    f"🗂️ V271 PWA WebAudio bridge: ws://127.0.0.1:"
+                    f"{_global_voice_pe_bridge.port}/voice-pe/v1",
+                    flush=True,
+                )
+            else:
+                print(
+                    "🗂️ V271 PWA WebAudio bridge disabled (set voice_pe_bridge_token "
+                    "or JARVIS_VOICE_PE_BRIDGE_TOKEN)",
+                    flush=True,
+                )
+                _global_voice_pe_bridge = None
+        else:
+            print("🗂️ V271 PWA WebAudio bridge disabled", flush=True)
+    except Exception as e:
+        _global_voice_pe_bridge = None
+        debug_log(f"voice_pe_bridge init failed (non-fatal): {e}", "voice_pe_bridge")
+        print(f"  ⚠ V271 PWA WebAudio bridge not available: {e}", flush=True)
+
     # Windows virtual microphone: the CleanAudioBus consumer that feeds the
     # Toustovač Clean Microphone endpoint through the ToustovacAudioBroker.
     try:
@@ -1326,10 +1430,18 @@ def main(smoke_test: bool = False) -> None:
             _global_everywhere_broker._tts_engine = tts
             _global_everywhere_broker.start()
             print("🪟 Everywhere broker started", flush=True)
+            try:
+                from .everywhere.video_server import start_video_server
+                if start_video_server(cfg) is not None:
+                    print("🎬 Video player server started", flush=True)
+            except Exception as vid_exc:
+                debug_log(f"video server start failed (non-fatal): {vid_exc}", "everywhere")
             # Spawn the native host so the toolbar / Alt+drag overlay exist.
             # Without this the broker listens on the pipe but no client ever
             # connects, so the Everywhere UI never appears.
             _spawn_everywhere_host()
+            # Watch the host: a crash must not silently kill the overlay.
+            _start_everywhere_host_watchdog()
         else:
             print("🪟 Everywhere disabled", flush=True)
     except Exception as e:
@@ -1349,6 +1461,16 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
             _global_everywhere_broker = None
+        _stop_everywhere_host_watchdog()
+        global _global_everywhere_host_proc
+        if _global_everywhere_host_proc is not None:
+            try:
+                if _global_everywhere_host_proc.poll() is None:
+                    _global_everywhere_host_proc.terminate()
+            except Exception:
+                pass
+            _global_everywhere_host_proc = None
+            debug_log("everywhere host stopped (smoke)", "everywhere")
         if dictation is not None:
             try:
                 dictation.stop()
@@ -1554,8 +1676,13 @@ def main(smoke_test: bool = False) -> None:
                 pass
             _global_everywhere_broker = None
             debug_log("everywhere broker stopped", "everywhere")
+        try:
+            from .everywhere.video_server import stop_video_server
+            stop_video_server()
+        except Exception:
+            pass
         # Stop the native Everywhere host process we spawned.
-        global _global_everywhere_host_proc
+        _stop_everywhere_host_watchdog()
         if _global_everywhere_host_proc is not None:
             try:
                 if _global_everywhere_host_proc.poll() is None:

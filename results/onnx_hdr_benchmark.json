@@ -1,0 +1,24 @@
+{
+  "status": "PASS",
+  "model": {
+    "name": "hdrtvnetpp_agcm_stable.onnx",
+    "path": "tools/qsvenc/models/hdrtvnetpp/hdrtvnetpp_agcm_stable.onnx",
+    "sha256": "CA3C243EC17F16D566D544DE5039BA4DD1504E608DC449CCB8A6DD506CE71957",
+    "sizeBytes": 33837,
+    "runtime": "QSVEncC 8.31 --vpp-onnx (OpenVINO), RGB io, 1296x2304 x1",
+    "precision": "fp16"
+  },
+  "candidates": {
+    "ONNX_XE": {"requestedDevice": "GPU", "deviceIdentity": "Intel Xe (oneVPL d3d11)", "framesEncoded": 300, "fps": 2.2, "wallSec": 136, "gpuLoadPct": 100, "output": "ONNX_XE.mp4", "P50": 71.5, "P90": 360.5, "P99": 962.5, "max": 4324.0, "gt1000Pct": 0.768, "blackP1": 154.5, "blackP5": 216.5, "skinHueDeltaDeg": 5.04, "skinChromaDeltaPct": -2.6, "edgeOvershootPct": 6.562, "p99CV": 34.56},
+    "ONNX_NPU": {"requestedDevice": "NPU", "deviceIdentity": "NPU [Intel(R) AI Boost] prec=f16", "framesEncoded": 300, "fps": 5.07, "wallSec": 59, "gpuLoadPct": "10-28 (NPU does inference)", "output": "ONNX_NPU.mp4", "P50": 69.5, "P90": 345.5, "P99": 943.5, "max": 1448.0, "gt1000Pct": 0.523, "blackP1": 151.5, "blackP5": 214.5, "skinHueDeltaDeg": 1.58, "skinChromaDeltaPct": 1.7, "edgeOvershootPct": 4.427, "p99CV": 34.56},
+    "ONNX_CPU": {"requestedDevice": "CPU", "deviceIdentity": "CPU", "framesEncoded": 300, "fps": 3.24, "wallSec": 93, "cpuLoadPct": 35.5, "gpuLoadPct": 8.7, "output": "ONNX_CPU.mp4", "P50": 69.5, "P90": 345.5, "P99": 943.5, "max": 1463.0, "gt1000Pct": 0.521, "blackP1": 151.5, "blackP5": 214.5, "skinHueDeltaDeg": 1.48, "skinChromaDeltaPct": 1.4, "edgeOvershootPct": 4.428, "p99CV": null}
+  },
+  "inferenceProof": {
+    "framesReturned": 300,
+    "inferenceTime": "logged per-run (QSVEncC onnx section)",
+    "outputNotEqualWrap": true,
+    "npuCpuConsistency": "NPU and CPU outputs near-identical (same model path)"
+  },
+  "best": "ONNX_NPU",
+  "note": "ONNX path shows per-frame highlight variance (p99 CV ~35% vs 5% source) - AI amplifies highlight motion; watch for shimmer on TV"
+}

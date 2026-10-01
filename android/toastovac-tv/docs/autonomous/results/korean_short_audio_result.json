@@ -1,0 +1,43 @@
+{
+  "scenario": "korean_short_audio",
+  "status": "pass",
+  "source": {
+    "url": "https://www.youtube.com/watch?v=x6uD7GeAj84",
+    "video_id": "x6uD7GeAj84",
+    "action": "cast.youtube"
+  },
+  "audio": {
+    "format": "PCM S16LE 48000 Hz stereo",
+    "transport": "TZHL v2 STREAM_AUDIO",
+    "packet_duration_ms": 40,
+    "bitrate_bps": 1536000,
+    "packets_sampled": 1249,
+    "bytes_queued": 4796160,
+    "underruns": 0
+  },
+  "sync": {
+    "clock": "shared send-time PTS; audio held until first video IDR",
+    "av_avg_ms": -15,
+    "av_p50_ms": -15,
+    "av_p95_ms": 14,
+    "av_max_abs_ms": 68,
+    "samples": 776,
+    "target_ms": 80,
+    "prefer_ms": 40,
+    "meets_target": true,
+    "meets_prefer_p50": true
+  },
+  "video": {
+    "decoder": "c2.amlogic.hevc.decoder",
+    "createCount": 1,
+    "hwc": "HwcVideo--65536 UnBlank DEVICE",
+    "frames_in": 1000,
+    "frames_out": 958,
+    "frames_dropped": 0
+  },
+  "subtitles": "burned Czech SRT",
+  "korean_speech": "original source.mp4 audio, not synthesized",
+  "issues": [
+    "First attempt started PCM before first IDR; avAvg ~157 ms. Fixed by holding audio until video origin + 80 ms AudioTrack buffer."
+  ]
+}

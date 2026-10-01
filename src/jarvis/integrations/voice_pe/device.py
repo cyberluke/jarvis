@@ -346,6 +346,12 @@ class VoicePEDevice:
         self._unsub_voice_assistant = None
         self._ingress: Optional[AudioIngress] = None
         self._pump_task: Optional[asyncio.Task] = None
+        #: Per-session no-audio watchdog tasks, keyed by session generation.
+        self._no_audio_watcher: dict = {}
+        #: Total satellite audio chunks ever received; the per-run snapshot
+        #: decides whether a run is streaming at all (no-audio watchdog).
+        self._audio_chunks_received: int = 0
+        self._audio_chunks_at_run_start: int = 0
         self._udp_server: Optional[UdpAudioServer] = None
         self._tts_task: Optional[asyncio.Task] = None
         self._http: Optional[TtsHttpServer] = None
@@ -451,6 +457,7 @@ class VoicePEDevice:
         self._drop_voice_assistant_subscription()
         self._cancel_tts_task()
         self._cancel_pump_task()
+        self._cancel_no_audio_watch()
         if self._ingress is not None:
             self._ingress.close()
         if self._udp_server is not None:
@@ -824,6 +831,17 @@ class VoicePEDevice:
 
         self.session_state = SessionState.BUTTON_TRIGGERED
         self._mark_event("run_start")
+        # A muted satellite streams digital silence: reject the run up front
+        # (``None`` -> ``VoiceAssistantResponse(error=True)`` on the device)
+        # instead of half-opening a pipeline whose audio the VAD would only
+        # discard. The mute switch state arrives before any run can open.
+        if self.media.muted:
+            self._cancel_no_audio_watch(self.session_generation)
+            await self.abort_run(
+                self.session_generation, "muted", self.turn_context()
+            )
+            self._mark_event("muted")
+            return None
         await self._event("RUN_START", {})
         self.session_state = SessionState.LISTENING
         # The STT stage of this run starts here; its single terminal is either
@@ -851,10 +869,17 @@ class VoicePEDevice:
                 "conversation_id": self._conversation_id,
                 "voice_state": self.session_state.value,
                 "audio_channel": self._active_channel,
+                "muted": int(self.media.muted),
+                "device_audio_settings": self.device_audio_settings,
                 "event_type": "run_start",
             }),
             "voice",
         )
+        # Per-run no-audio watchdog: with the DSP in ``device_enhanced`` the
+        # satellite is the only audio source, so a run that stays open with
+        # zero new chunks is a silent mic (muted or dead), not a pipeline bug.
+        self._audio_chunks_at_run_start = self._audio_chunks_received
+        self._spawn_no_audio_watch(self.session_generation)
 
         if self.capabilities.uses_api_audio or self.capabilities.api_audio:
             return 0
@@ -910,6 +935,7 @@ class VoicePEDevice:
                 return
         elif int(generation) != int(self.session_generation):
             return
+        self._cancel_no_audio_watch(generation)
         # Second callback for the very same run is ignored: only the first
         # writes the ERROR/RUN_END pair.
         close_key: tuple
@@ -1031,6 +1057,7 @@ class VoicePEDevice:
     async def handle_audio(self, data: bytes, data2: Optional[bytes] = None) -> None:
         """Non-blocking microphone ingress into the bounded queue."""
         started = time.monotonic()
+        self._audio_chunks_received += 1
         if self.session_state is SessionState.LISTENING:
             self.session_state = SessionState.RECORDING
         if self._ingress is not None:
@@ -1984,6 +2011,65 @@ class VoicePEDevice:
             self._pump_task.cancel()
             self._pump_task = None
 
+    def _spawn_no_audio_watch(self, generation: int) -> None:
+        """Start the per-run watchdog: a run that opens but receives no
+        satellite audio within ``no_audio_warn_s`` seconds is flagged loudly,
+        because with the DSP in ``device_enhanced`` the satellite is the only
+        audio source and silence means a muted or dead microphone."""
+        warn_s = float(getattr(self.config, "no_audio_warn_s", 0.0) or 0.0)
+        if warn_s <= 0:
+            return
+        self._cancel_no_audio_watch(generation)
+        self._no_audio_watcher[int(generation)] = asyncio.ensure_future(
+            self._warn_if_no_audio(int(generation), warn_s)
+        )
+
+    def _cancel_no_audio_watch(self, generation: Optional[int] = None) -> None:
+        """Cancel one run's watchdog, or every watchdog when no run is named."""
+        if generation is None:
+            for task in self._no_audio_watcher.values():
+                task.cancel()
+            self._no_audio_watcher.clear()
+            return
+        task = self._no_audio_watcher.pop(int(generation), None)
+        if task is not None:
+            task.cancel()
+
+    async def _warn_if_no_audio(self, generation: int, warn_s: float) -> None:
+        """Loud diagnostic when a run stays open with zero new audio blocks."""
+        try:
+            await asyncio.sleep(warn_s)
+        except asyncio.CancelledError:
+            return
+        if int(generation) != int(self.session_generation):
+            return
+        if self.session_state is SessionState.IDLE:
+            return
+        received = int(self._audio_chunks_received)
+        if received > int(self._audio_chunks_at_run_start):
+            return
+        self._bump_metric("no_audio_warnings")
+        self._mark_event("no_audio")
+        self.last_error = (
+            f"no satellite audio for {warn_s:.0f}s (session {generation}); "
+            f"mic muted or dead"
+        )
+        debug_log(
+            _kvp({
+                "component": "voice_pe",
+                "device_name": self.identity.get("node_name"),
+                "connection_generation": self.connection_generation,
+                "session_id": generation,
+                "chunks_received": received,
+                "chunks_at_run_start": self._audio_chunks_at_run_start,
+                "muted": int(self.media.muted),
+                "device_audio_settings": self.device_audio_settings,
+                "warning": self.last_error,
+                "event_type": "no_audio",
+            }),
+            "voice",
+        )
+
     def _submit(self, coro) -> None:
         loop = self.loop
         if loop is None:
@@ -2009,18 +2095,13 @@ class VoicePEDevice:
         self.config.continued_conversation = bool(continuous)
         self.wake_words_disabled = not continuous
         # Centre-button commit: the single press is consumed on-device, so the
-        # quick "I'm done talking, process now" gesture in continuous mode is
-        # the double press. In continuous mode map double_press ->
-        # commit_utterance (flush the collected speech immediately); in
-        # push-to-talk it keeps the overlay default. A user-set custom
-        # double_press mapping is left untouched.
+        # quick "I'm done talking, process now" gesture in both modes is the
+        # double press. The default double_press mapping is commit_utterance
+        # (flush the collected speech immediately); a user-set custom mapping
+        # is left untouched.
         current_double = self.config.button_actions.get("double_press")
-        if continuous:
-            if current_double in (None, "", "toggle_overlay"):
-                self.config.button_actions["double_press"] = "commit_utterance"
-        else:
-            if current_double == "commit_utterance":
-                self.config.button_actions["double_press"] = "toggle_overlay"
+        if current_double in (None, "", "toggle_overlay"):
+            self.config.button_actions["double_press"] = "commit_utterance"
         self._mark_event(
             "continuous" if continuous else "push_to_talk")
         debug_log(

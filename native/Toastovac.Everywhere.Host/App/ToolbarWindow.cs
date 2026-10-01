@@ -17,6 +17,8 @@ public static class ToolbarWindow
 {
     private static StackPanel? _root;
     private static Border? _card;
+    private static FontIcon? _busy;
+    private static Storyboard? _busyStory;
     private static readonly List<(Button btn, string id)> _buttons = new();
     private static int _focusIndex;
     private static Action<string>? _onAction;
@@ -57,6 +59,7 @@ public static class ToolbarWindow
         {
             AddButton(id, glyph, label, key);
         }
+        EnsureBusyRing();
 
         // Rounded card container so the bar has no harsh square edges.
         _card = new Border
@@ -266,12 +269,23 @@ public static class ToolbarWindow
         var ay = anchor?.y ?? (sy + sh - height - 40);
         var x = Math.Max(sx, Math.Min(ax, sx + sw - width));
         var y = Math.Max(sy, Math.Min(ay, sy + sh - height));
+        var wasVisible = window.AppWindow.IsVisible;
         window.AppWindow.Resize(new Windows.Graphics.SizeInt32(
             (int)Math.Ceiling(width), (int)Math.Ceiling(height)));
         window.AppWindow.Move(new Windows.Graphics.PointInt32((int)x, (int)y));
+        // Re-show after a startup Hide() or a Dismiss: AppWindow.Activate()
+        // alone does not bring an explicitly hidden window back.
+        if (!wasVisible)
+        {
+            window.AppWindow.Show();
+        }
+        Mode = OverlayMode.Chocobar;
         window.Activate();
 
-        if (_card is not null)
+        // Entrance animation only on the first show of a session; a
+        // reposition (e.g. after the async snapshot lands) must not replay
+        // the fade-in over an already-visible bar.
+        if (_card is not null && !wasVisible)
         {
             PlayEntrance(_card);
         }
@@ -284,9 +298,207 @@ public static class ToolbarWindow
     /// action. Esc still closes the panel.</summary>
     public static bool ResultPanelActive { get; set; }
 
+    public enum OverlayMode
+    {
+        Hidden,
+        Chocobar,
+        EverywherePending,
+        EverywhereResult,
+        EverywhereError,
+    }
+
+    public static OverlayMode Mode { get; set; } = OverlayMode.Hidden;
+    public static int Generation { get; private set; }
+    public static int ActiveRequestId { get; private set; }
+    public static string RenderPayload { get; private set; } = "";
+
+    public static int NextGeneration()
+    {
+        Generation += 1;
+        ActiveRequestId = Generation;
+        return ActiveRequestId;
+    }
+
+    public static bool IsStale(int requestId) => requestId != ActiveRequestId;
+
+    public static void InvalidateRequests()
+    {
+        ActiveRequestId = 0;
+        RenderPayload = "";
+    }
+
+    /// <summary>Canonical close: reset semantic state, rebuild Chocobar, hide.</summary>
+    public static void CloseOverlay(Window? window, string reason)
+    {
+        EverywhereApp.Log(
+            $"overlay.close reason={reason} mode={Mode} gen={Generation} req={ActiveRequestId}");
+        ResultPanelActive = false;
+        InvalidateRequests();
+        ResetToChocobar();
+        Mode = OverlayMode.Hidden;
+        Hide(window);
+    }
+
+    public static void ResetToChocobar()
+    {
+        ResultPanelActive = false;
+        if (_root is null || _card is null)
+        {
+            return;
+        }
+        _root.Children.Clear();
+        _buttons.Clear();
+        _focusIndex = 0;
+        foreach (var (id, glyph, label, key) in _defs)
+        {
+            AddButton(id, glyph, label, key);
+        }
+        EnsureBusyRing();
+        _card.Child = _root;
+        RenderPayload = "";
+    }
+
+    public static void ShowPending(Window? window, string action)
+    {
+        Mode = OverlayMode.EverywherePending;
+        ResultPanelActive = false;
+        RenderPayload = action;
+        SetBusy(true, action);
+        if (window is not null && window.AppWindow.IsVisible == false)
+        {
+            window.AppWindow.Show();
+        }
+    }
+
+    public static void SetBusy(bool busy, string action = "")
+    {
+        foreach (var (btn, id) in _buttons)
+        {
+            btn.Opacity = busy && id != "cast" ? 0.75 : 1.0;
+        }
+        // Live activity indicator: the moment an action is queued (capture or
+        // task in flight) the spinning glyph appears next to the buttons, so a
+        // multi-second wait never looks frozen.
+        if (_busy is not null)
+        {
+            _busy.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+            if (busy)
+            {
+                _busyStory?.Begin();
+            }
+            else
+            {
+                _busyStory?.Stop();
+            }
+        }
+        if (_card is not null)
+        {
+            _card.BorderBrush = new SolidColorBrush(busy
+                ? Windows.UI.Color.FromArgb(220, 56, 189, 248)
+                : Windows.UI.Color.FromArgb(90, 245, 158, 11));
+        }
+        EverywhereApp.Log(busy
+            ? $"overlay.busy action={action}"
+            : "overlay.idle");
+    }
+
+    /// <summary>Create (or re-attach after a Chocobar rebuild) the busy
+    /// spinner at the end of the button row. Code-only animation (a rotating
+    /// Sync glyph): theme resources like ProgressRing crash this single-file
+    /// WinUI build (XamlParseException), so no resources are referenced.</summary>
+    private static void EnsureBusyRing()
+    {
+        if (_root is null)
+        {
+            return;
+        }
+        var spin = new RotateTransform { CenterX = 9, CenterY = 9 };
+        _busy = new FontIcon
+        {
+            Glyph = "\uE895",  // Sync (circular arrows)
+            FontSize = 18,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(
+                Windows.UI.Color.FromArgb(255, 245, 158, 11)),
+            RenderTransform = spin,
+            Visibility = Visibility.Collapsed,
+        };
+        var anim = new DoubleAnimation
+        {
+            From = 0,
+            To = 360,
+            Duration = new Duration(TimeSpan.FromMilliseconds(900)),
+            RepeatBehavior = RepeatBehavior.Forever,
+        };
+        Storyboard.SetTarget(anim, spin);
+        Storyboard.SetTargetProperty(anim, "Angle");
+        _busyStory = new Storyboard();
+        _busyStory.Children.Add(anim);
+        _root.Children.Add(_busy);
+    }
+
+    private static void ShowCastFlyout(Button host)
+    {
+        var flyout = new MenuFlyout();
+        void Item(string label, string mode)
+        {
+            var mi = new MenuFlyoutItem { Text = label };
+            mi.Click += (_, _) => _onAction?.Invoke("cast:" + mode);
+            flyout.Items.Add(mi);
+        }
+        Item("LAN Subtitles Only", "lan_subtitles");
+        Item("Media URL", "media_url");
+        Item("Local File", "local_file");
+        Item("Screen Mirror", "screen_mirror");
+        Item("Browser Tab", "browser_tab");
+        Item("YouTube", "youtube");
+        flyout.Items.Add(new MenuFlyoutSeparator());
+        var open = new MenuFlyoutItem { Text = "Open Cast / Subtitles panel" };
+        open.Click += (_, _) => _onAction?.Invoke("subtitles");
+        flyout.Items.Add(open);
+        flyout.ShowAt(host);
+    }
+
+    public static void ShowError(Window? window, string message)
+    {
+        Mode = OverlayMode.EverywhereError;
+        ResultPanelActive = true;
+        RenderPayload = message;
+        SetBusy(false);
+        if (window?.Content is Border card && card.Child is StackPanel panel)
+        {
+            panel.Children.Clear();
+            var content = new StackPanel { Spacing = 10, Padding = new Thickness(8) };
+            content.Children.Add(new TextBlock
+            {
+                Text = string.IsNullOrWhiteSpace(message)
+                    ? "Translation failed." : message,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(
+                    Windows.UI.Color.FromArgb(255, 248, 113, 113)),
+                FontSize = 15,
+            });
+            var close = new Button
+            {
+                Content = "✕ Close",
+                Padding = new Thickness(14, 8, 14, 8),
+                CornerRadius = new CornerRadius(8),
+            };
+            close.Click += (_, _) => { ResultPanelActive = false; Hide(window); };
+            content.Children.Add(close);
+            panel.Children.Add(content);
+        }
+        if (window is not null && window.AppWindow.IsVisible == false)
+        {
+            window.AppWindow.Show();
+        }
+    }
+
     public static void ShowResult(Window? window, string result,
-        string capability, Action onInsert, Action onCopy,
-        string action = "", Action<string>? onRetranslate = null)
+        string capability, string action = "",
+        Action<string>? onRetranslate = null,
+        Action? onInsert = null, Action? onCopy = null)
     {
         if (window?.Content is not Border card
             || card.Child is not StackPanel panel)
@@ -294,6 +506,8 @@ public static class ToolbarWindow
             return;
         }
         ResultPanelActive = true;
+        RenderPayload = result;
+        SetBusy(false);
         panel.Children.Clear();
 
         var content = new StackPanel { Spacing = 10, Padding = new Thickness(8) };
@@ -357,7 +571,7 @@ public static class ToolbarWindow
                 Padding = new Thickness(14, 8, 14, 8),
                 CornerRadius = new CornerRadius(8),
             };
-            insert.Click += (_, _) => { ResultPanelActive = false; onInsert(); };
+            insert.Click += (_, _) => { ResultPanelActive = false; onInsert?.Invoke(); };
             row.Children.Add(insert);
         }
         var copy = new Button
@@ -366,7 +580,7 @@ public static class ToolbarWindow
             Padding = new Thickness(14, 8, 14, 8),
             CornerRadius = new CornerRadius(8),
         };
-        copy.Click += (_, _) => onCopy();
+        copy.Click += (_, _) => onCopy?.Invoke();
         row.Children.Add(copy);
         var close = new Button
         {

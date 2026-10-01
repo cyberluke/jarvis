@@ -180,7 +180,7 @@ class TestVoicePEConfig:
 
     def test_button_mapping_defaults_are_the_safe_set(self):
         actions = _config().button_actions
-        assert actions["double_press"] == "toggle_overlay"
+        assert actions["double_press"] == "commit_utterance"
         assert actions["triple_press"] == "open_command_palette"
         assert actions["long_press"] == "cancel_current_agent_run"
         assert actions["easter_egg_press"] == "toaster_easter_egg"
@@ -945,11 +945,11 @@ class TestDeviceSession:
     def test_button_event_maps_to_the_configured_action(self):
         device = self._api_device()
         calls = []
-        device.actions.register("toggle_overlay", lambda: calls.append("overlay"))
+        device.actions.register("commit_utterance", lambda: calls.append("commit"))
         device._handle_button_event("double_press")
         device._handle_button_event("long_press")
         device._handle_button_event("some_unknown_press")
-        assert calls == ["overlay"]
+        assert calls == ["commit"]
         assert device.metrics["button_double_press"] >= 1
 
     def test_long_press_cancels_the_active_run(self):

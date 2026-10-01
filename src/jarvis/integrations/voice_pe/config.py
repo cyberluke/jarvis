@@ -23,7 +23,7 @@ BUTTON_ACTIONS_KEY = "voice_pe_button_actions"
 
 #: Safe-by-default centre-button event mapping (single click stays local).
 DEFAULT_BUTTON_ACTIONS: Dict[str, str] = {
-    "double_press": "toggle_overlay",
+    "double_press": "commit_utterance",
     "triple_press": "open_command_palette",
     "long_press": "cancel_current_agent_run",
     "easter_egg_press": "toaster_easter_egg",
@@ -191,6 +191,24 @@ def from_settings(settings: Any) -> VoicePEConfig:
         led_rgb=_parse_rgb(getattr(settings, "voice_pe_led_rgb", None), (0.55, 0.0, 1.0)),
         button_actions=actions,
         devices=devices,
+        profile=str(getattr(settings, "voice_pe_profile", "auto") or "auto").strip().lower(),
+        normalizer_enabled=bool(getattr(settings, "voice_pe_normalizer_enabled", False)),
+        normalizer_target_db=_as_float(
+            getattr(settings, "voice_pe_normalizer_target_db", -28.0), -28.0
+        ),
+        normalizer_max_gain_db=_as_float(
+            getattr(settings, "voice_pe_normalizer_max_gain_db", 9.0), 9.0
+        ),
+        normalizer_attack_db_per_s=_as_float(
+            getattr(settings, "voice_pe_normalizer_attack_db_per_s", 3.0), 3.0
+        ),
+        normalizer_limiter_db=_as_float(
+            getattr(settings, "voice_pe_normalizer_limiter_db", -1.0), -1.0
+        ),
+        no_audio_warn_s=_as_float(
+            getattr(settings, "voice_pe_no_audio_warn_s", 6.0), 6.0
+        ),
+        calibrations=_as_dict(getattr(settings, "voice_pe_calibrations", None)),
     )
 
 
