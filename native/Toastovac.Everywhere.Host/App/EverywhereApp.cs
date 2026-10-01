@@ -161,6 +161,30 @@ private int _activeRequestSerial;
                 break;
             case "task_list":
                 break;  // handled via round-trip correlation
+            case "overlay":
+                // Tray-menu unhide: the daemon asked the host to open an
+                // overlay window (idempotent when already visible).
+                if (msg.TryGetProperty("overlay", out var ovProp)
+                    && ovProp.ValueKind == JsonValueKind.String)
+                {
+                    var overlay = ovProp.GetString();
+                    switch (overlay)
+                    {
+                        case "subtitles":
+                            SubtitlesOverlay.Toggle(_window, _pipe);
+                            break;
+                        case "coach":
+                            CoachOverlay.Toggle(_window, _pipe);
+                            break;
+                        case "ocr":
+                            OcrOverlay.Toggle(_window, _pipe);
+                            break;
+                        default:
+                            Log($"overlay push unhandled: {overlay}");
+                            break;
+                    }
+                }
+                break;
             default:
                 Log($"pipe message unhandled kind={kind}");
                 break;

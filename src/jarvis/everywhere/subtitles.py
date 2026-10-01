@@ -74,6 +74,11 @@ class SubtitlesService:
         self.target_language = "cs"        # translation target
         self.live_audio = False            # speak the translation via Piper
         self.politeness = ""               # Asian politeness/context key
+        # Audio routing chosen in the overlay: input is either the system
+        # render loopback ("loopback", default) or the engine's mic lane
+        # ("mic"); output is a PortAudio device index or None (system default).
+        self.audio_input = "loopback"
+        self.audio_output: Optional[int] = None
 
     # ── lifecycle ─────────────────────────────────────────────────────
     @property
@@ -112,7 +117,9 @@ class SubtitlesService:
     def update_settings(self, *, source: Optional[str] = None,
                         target: Optional[str] = None,
                         live_audio: Optional[bool] = None,
-                        politeness: Optional[str] = None) -> None:
+                        politeness: Optional[str] = None,
+                        audio_input: Optional[str] = None,
+                        audio_output: Optional[object] = None) -> None:
         with self._lock:
             if source is not None:
                 self.source_language = source
@@ -122,10 +129,19 @@ class SubtitlesService:
                 self.live_audio = live_audio
             if politeness is not None:
                 self.politeness = politeness
+            if audio_input is not None:
+                self.audio_input = str(audio_input or "loopback")
+            if audio_output is not None:
+                try:
+                    self.audio_output = int(audio_output) if audio_output else None
+                except (TypeError, ValueError):
+                    self.audio_output = None
         debug_log(
             f"subtitles: settings src={self.source_language} "
             f"tgt={self.target_language} tts={int(self.live_audio)} "
-            f"politeness={self.politeness or '-'}", "everywhere")
+            f"politeness={self.politeness or '-'} "
+            f"input={self.audio_input} output={self.audio_output}",
+            "everywhere")
 
     # ── capture + VAD loop ────────────────────────────────────────────
     def _loop(self) -> None:
@@ -138,8 +154,20 @@ class SubtitlesService:
             with self._lock:
                 if not self._running:
                     break
+                input_lane = self.audio_input
             try:
-                _rate, frames = native_audio.pop_render_ref(96)
+                if input_lane == "mic":
+                    # Engine mic lane (the current capture device). Falls
+                    # back to the raw ASR ring if the cleaned lane is absent.
+                    try:
+                        from ..listening import audio_io as _aio
+                        _rate, frames = _aio.pop_local_clean(96)
+                    except Exception:
+                        frames = None
+                    if frames is None or len(frames) == 0:
+                        _rate, frames = native_audio.pop_asr(96)
+                else:
+                    _rate, frames = native_audio.pop_render_ref(96)
             except Exception as exc:
                 debug_log(f"subtitles: capture read error: {exc}",
                           "everywhere")
@@ -257,8 +285,10 @@ class SubtitlesService:
             return
         try:
             # Piper picks the voice from the target language via its language
-            # map; the TTS engine resolves the per-language model.
-            tts.speak(text)
+            # map; the TTS engine resolves the per-language model. The
+            # overlay-selected output device (PortAudio index) wins over the
+            # system default.
+            tts.speak(text, output_device=self.audio_output)
         except Exception as exc:
             debug_log(f"subtitles: TTS failed: {exc}", "everywhere")
 

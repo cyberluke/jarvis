@@ -825,6 +825,32 @@ class Settings:
     #: Seconds of zero satellite audio before a run is loudly flagged (0 off).
     voice_pe_no_audio_warn_s: float
 
+    # Voice PE WebAudio bridge (``v271-webaudio/1``). Streams the satellite
+    # microphone as framed PCM16LE over a loopback WebSocket for the V271
+    # PWA composer. No token means the bridge refuses to start (no open
+    # access).
+    voice_pe_bridge_enabled: bool
+    voice_pe_bridge_port: int
+    voice_pe_bridge_token: str
+    voice_pe_bridge_allowed_origins: list[str]
+    voice_pe_bridge_max_clients: int
+    voice_pe_bridge_buffer_frames: int
+    voice_pe_bridge_device: str
+
+    # Voice PE audio pipeline (see integrations/voice_pe/audio_pipeline.spec.md):
+    # one typed settings model shared by UI, runtime, calibration and
+    # diagnostics. ``voice_pe_profile`` is the active profile (auto/desk/
+    # room/far_field/meeting; per-device overrides live in device metadata).
+    voice_pe_profile: str
+    # Speech-aware post normalizer (per-device gain stage in the pump).
+    voice_pe_normalizer_enabled: bool
+    voice_pe_normalizer_target_db: float
+    voice_pe_normalizer_max_gain_db: float
+    voice_pe_normalizer_attack_db_per_s: float
+    voice_pe_normalizer_limiter_db: float
+    # Persisted calibration evidence + tuned overrides, keyed by MAC.
+    voice_pe_calibrations: Dict[str, Any]
+
     # Windows virtual microphone (Toustovač Clean Microphone, WDK WaveRT).
     # Master switch for the CleanAudioBus daemon publisher.
     virtual_microphone_enabled: bool

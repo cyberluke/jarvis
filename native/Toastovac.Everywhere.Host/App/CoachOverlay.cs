@@ -16,6 +16,8 @@ public static class CoachOverlay
     private static StackPanel? _feed;
     private static ComboBox? _langCombo;
     private static ComboBox? _domainCombo;
+    private static ComboBox? _audioInCombo;
+    private static ComboBox? _audioOutCombo;
     private static EverywherePipeClient? _pipe;
     private static bool _running;
     private static System.Threading.Timer? _pollTimer;
@@ -26,7 +28,34 @@ public static class CoachOverlay
         _pipe = pipe;
         if (_window is not null)
         {
-            Close();
+            // Reveal a hidden window (tray unhide); close a visible one.
+            var win = _window;
+            var revealDq = anchor?.DispatcherQueue ?? _dq;
+            if (revealDq is null)
+            {
+                Close();
+                return;
+            }
+            revealDq.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (win.AppWindow.IsVisible)
+                    {
+                        Close();
+                    }
+                    else
+                    {
+                        win.AppWindow.Show();
+                        try { win.Activate(); } catch (Exception) { }
+                        EverywhereApp.Log("coach overlay: revealed");
+                    }
+                }
+                catch (Exception)
+                {
+                    Close();
+                }
+            });
             return;
         }
         // Create the window on the toolbar window's UI thread (the hook fires
@@ -53,6 +82,7 @@ public static class CoachOverlay
             Windowing.Chrome.MakeToolOverlay(win);
             Position(win);
             win.Activate();
+            LoadAudioOptionsAsync();
             EverywhereApp.Log("coach overlay shown");
         }
         catch (Exception ex)
@@ -115,17 +145,108 @@ public static class CoachOverlay
         sumBtn.Click += (_, _) => Summarize();
         var closeBtn = new Button { Content = "✕", FontSize = 14, MinHeight = 40 };
         closeBtn.Click += (_, _) => Close();
+        var hideBtn = new Button { Content = "🙈 Hide", FontSize = 14, MinHeight = 40 };
+        hideBtn.Click += (_, _) => Hide();
         controls.Children.Add(startBtn);
         controls.Children.Add(stopBtn);
         controls.Children.Add(sumBtn);
+        controls.Children.Add(hideBtn);
         controls.Children.Add(closeBtn);
         root.Children.Add(controls);
+
+        // Sound routing row: capture lanes + TTS output device.
+        var audioRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            Margin = new Thickness(0, 10, 0, 0),
+        };
+        audioRow.Children.Add(new TextBlock { Text = "🎙 Input:", FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center });
+        _audioInCombo = new ComboBox { MinWidth = 280, FontSize = 14 };
+        _audioInCombo.Items.Add(new ComboBoxItem
+        { Content = "Microphone + system audio", Tag = "both" });
+        _audioInCombo.Items.Add(new ComboBoxItem
+        { Content = "Microphone only", Tag = "mic" });
+        _audioInCombo.Items.Add(new ComboBoxItem
+        { Content = "System audio only (remote party)", Tag = "loopback" });
+        _audioInCombo.SelectedIndex = 0;
+        audioRow.Children.Add(_audioInCombo);
+        audioRow.Children.Add(new TextBlock { Text = "🔊 Output:", FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center });
+        _audioOutCombo = new ComboBox { MinWidth = 300, FontSize = 14 };
+        _audioOutCombo.Items.Add(new ComboBoxItem
+        { Content = "System default", Tag = "" });
+        _audioOutCombo.SelectedIndex = 0;
+        audioRow.Children.Add(_audioOutCombo);
+        root.Children.Add(audioRow);
 
         var scroller = new ScrollViewer { MaxHeight = 320 };
         _feed = new StackPanel { Spacing = 6 };
         scroller.Content = _feed;
         root.Children.Add(scroller);
         return root;
+    }
+
+    private static void LoadAudioOptionsAsync()
+    {
+        if (_pipe is null) return;
+        var dq = _dq;
+        Task.Run(() =>
+        {
+            JsonElement? reply;
+            try
+            {
+                reply = _pipe.RoundTrip(BuildCmd("options"));
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            if (reply is null) return;
+            if (!reply.Value.TryGetProperty("audio", out var audio)
+                || audio.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+            dq?.TryEnqueue(() => ApplyAudioOptions(audio));
+        });
+    }
+
+    private static void ApplyAudioOptions(JsonElement audio)
+    {
+        if (audio.TryGetProperty("outputs", out var outputs)
+            && outputs.ValueKind == JsonValueKind.Array
+            && _audioOutCombo is not null)
+        {
+            var keep = (_audioOutCombo.SelectedItem as ComboBoxItem)?.Tag
+                as string ?? "";
+            _audioOutCombo.Items.Clear();
+            _audioOutCombo.Items.Add(new ComboBoxItem
+            { Content = "System default", Tag = "" });
+            foreach (var outp in outputs.EnumerateArray())
+            {
+                var id = outp.TryGetProperty("id", out var idp)
+                    ? idp.GetRawText() : "";
+                var label = outp.TryGetProperty("label", out var lbp)
+                    ? lbp.GetString() ?? id : id;
+                var isDefault = outp.TryGetProperty("default", out var dp)
+                    && dp.ValueKind == JsonValueKind.True;
+                _audioOutCombo.Items.Add(new ComboBoxItem
+                { Content = (isDefault ? "★ " : "") + label, Tag = id });
+            }
+            var sel = 0;
+            for (var i = 0; i < _audioOutCombo.Items.Count; i++)
+            {
+                if (((ComboBoxItem)_audioOutCombo.Items[i]).Tag as string
+                    == keep)
+                {
+                    sel = i;
+                    break;
+                }
+            }
+            _audioOutCombo.SelectedIndex = sel;
+        }
     }
 
     private static void Position(Window win)
@@ -147,12 +268,18 @@ public static class CoachOverlay
         if (_pipe is null) return;
         var lang = (_langCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "en";
         var domain = (_domainCombo?.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
+        var audioInput = (_audioInCombo?.SelectedItem as ComboBoxItem)
+            ?.Tag as string ?? "both";
+        var audioOutput = (_audioOutCombo?.SelectedItem as ComboBoxItem)
+            ?.Tag as string ?? "";
         // RoundTrip can block for seconds on a slow broker — never on the
         // UI thread (a frozen UI thread renders black and unclosable).
         Task.Run(() =>
         {
             var reply = _pipe.RoundTrip(BuildCmd("start",
-                ("answer_language", lang), ("domain_hint", domain)));
+                ("answer_language", lang), ("domain_hint", domain),
+                ("audio_input", audioInput),
+                ("audio_output", audioOutput)));
             if (reply is not null
                 && reply.Value.TryGetProperty("kind", out var k)
                 && k.GetString() == "coach_started"
@@ -277,6 +404,27 @@ public static class CoachOverlay
         {
             try { win.AppWindow.Hide(); } catch (Exception) { }
             try { win.Close(); } catch (Exception) { }
+        }
+    }
+
+    /// <summary>Hide the overlay window without stopping the session. The
+    /// tray menu's overlay item (or the hotkey) reveals it again.</summary>
+    internal static void Hide()
+    {
+        var win = _window;
+        if (win is null)
+        {
+            return;
+        }
+        try
+        {
+            win.AppWindow.Hide();
+            EverywhereApp.Log("coach overlay: hidden (session kept)");
+        }
+        catch (Exception ex)
+        {
+            EverywhereApp.Log($"coach overlay hide failed: "
+                + $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 

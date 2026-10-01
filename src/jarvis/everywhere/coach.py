@@ -83,6 +83,11 @@ class InterviewCoach:
         # Live settings from the overlay.
         self.answer_language = "en"       # "en" | "cs" (or others later)
         self.domain_hint = "AI/ML developer interview (Python, ML, HR)"
+        # Audio routing chosen in the overlay: ``mic`` (default, the headset
+        # mic lane), ``loopback`` (remote-party system audio) or ``both``.
+        # Output is a PortAudio device index or None (system default).
+        self.audio_input = "both"
+        self.audio_output: Optional[int] = None
         # Rolling interview context: (speaker, text) pairs.
         self._context: list[tuple[str, str]] = []
         self._max_context = 24
@@ -132,14 +137,26 @@ class InterviewCoach:
         debug_log("coach: session stopped", "everywhere")
 
     def update_settings(self, *, answer_language: Optional[str] = None,
-                        domain_hint: Optional[str] = None) -> None:
+                        domain_hint: Optional[str] = None,
+                        audio_input: Optional[str] = None,
+                        audio_output: Optional[object] = None) -> None:
         with self._lock:
             if answer_language is not None:
                 self.answer_language = answer_language
             if domain_hint is not None:
                 self.domain_hint = domain_hint
+            if audio_input is not None:
+                lane = str(audio_input or "both").strip().lower()
+                self.audio_input = lane if lane in ("mic", "loopback", "both") \
+                    else "both"
+            if audio_output is not None:
+                try:
+                    self.audio_output = int(audio_output) if audio_output else None
+                except (TypeError, ValueError):
+                    self.audio_output = None
         debug_log(f"coach: settings lang={self.answer_language} "
-                  f"domain={self.domain_hint}", "everywhere")
+                  f"domain={self.domain_hint} input={self.audio_input} "
+                  f"output={self.audio_output}", "everywhere")
 
     # ── capture loop ──────────────────────────────────────────────────
     def _loop(self) -> None:
@@ -167,44 +184,47 @@ class InterviewCoach:
             with self._lock:
                 if not self._running:
                     break
+                input_lane = self.audio_input
             # Mic (me): cleaned 16 kHz from the Plantronics capture lane.
-            try:
-                _r, mic = _aio.pop_local_clean(48)
-                if mic is None:
-                    _r, mic = native_audio.pop_asr(48)
-            except Exception:
-                mic = None
-            if mic is not None and len(mic) > 0:
-                for off in range(0, len(mic) - 159, 160):
-                    frame = mic[off:off + 160]
-                    rms = float(np.sqrt(np.mean(frame * frame)) + 1e-9)
-                    if rms >= _SILENCE_RMS:
-                        mic_voiced.append(frame); mic_silence = 0
-                    else:
-                        mic_silence += 1
-                        if mic_voiced: mic_voiced.append(frame)
-                    if mic_voiced and (mic_silence >= _END_SILENCE
-                                       or len(mic_voiced) >= _MAX_UTTERANCE):
-                        self._on_utterance("me", np.concatenate(mic_voiced), 16000)
-                        mic_voiced = []; mic_silence = 0
+            if input_lane in ("mic", "both"):
+                try:
+                    _r, mic = _aio.pop_local_clean(48)
+                    if mic is None:
+                        _r, mic = native_audio.pop_asr(48)
+                except Exception:
+                    mic = None
+                if mic is not None and len(mic) > 0:
+                    for off in range(0, len(mic) - 159, 160):
+                        frame = mic[off:off + 160]
+                        rms = float(np.sqrt(np.mean(frame * frame)) + 1e-9)
+                        if rms >= _SILENCE_RMS:
+                            mic_voiced.append(frame); mic_silence = 0
+                        else:
+                            mic_silence += 1
+                            if mic_voiced: mic_voiced.append(frame)
+                        if mic_voiced and (mic_silence >= _END_SILENCE
+                                           or len(mic_voiced) >= _MAX_UTTERANCE):
+                            self._on_utterance("me", np.concatenate(mic_voiced), 16000)
+                            mic_voiced = []; mic_silence = 0
             # Loopback (others): WASAPI loopback of the same headset earphone.
-            try:
-                _r, lb = loopback.pop(96)
-            except Exception:
-                lb = None
-            if lb is not None and len(lb) > 0:
-                for off in range(0, len(lb) - 479, 480):
-                    frame = lb[off:off + 480]
-                    rms = float(np.sqrt(np.mean(frame * frame)) + 1e-9)
-                    if rms >= _SILENCE_RMS:
-                        lb_voiced.append(frame); lb_silence = 0
-                    else:
-                        lb_silence += 1
-                        if lb_voiced: lb_voiced.append(frame)
-                    if lb_voiced and (lb_silence >= _END_SILENCE
-                                      or len(lb_voiced) >= _MAX_UTTERANCE):
-                        self._on_utterance("others", np.concatenate(lb_voiced), 48000)
-                        lb_voiced = []; lb_silence = 0
+            if input_lane in ("loopback", "both"):
+                try:
+                    _r, lb = loopback.pop(96)
+                except Exception:
+                    lb = None
+                if lb is not None and len(lb) > 0:
+                    for off in range(0, len(lb) - 479, 480):
+                        frame = lb[off:off + 480]
+                        rms = float(np.sqrt(np.mean(frame * frame)) + 1e-9)
+                        if rms >= _SILENCE_RMS:
+                            lb_voiced.append(frame); lb_silence = 0
+                        else:
+                            lb_silence += 1
+                            if lb_voiced: lb_voiced.append(frame)
+                        if lb_voiced and (lb_silence >= _END_SILENCE
+                                          or len(lb_voiced) >= _MAX_UTTERANCE):
+                            self._on_utterance("others", np.concatenate(lb_voiced), 48000)
+                            lb_voiced = []; lb_silence = 0
             if (mic is None or len(mic) == 0) and (lb is None or len(lb) == 0):
                 time.sleep(0.01)
         if loopback is not None:

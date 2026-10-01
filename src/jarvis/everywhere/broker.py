@@ -70,6 +70,61 @@ _READ_BUF = 8192
 _MAX_PIPE_INSTANCES = 8
 
 
+def audio_device_options() -> dict:
+    """Device lists for the overlay combos (sound input + output).
+
+    Input lanes: ``loopback`` (system render loopback — what is playing on
+    the machine) and ``mic`` (the engine's current capture device). Outputs
+    are the WASAPI render endpoints as PortAudio indices — the same device
+    space Piper's playback uses — with the current system default flagged.
+    """
+    inputs = [
+        {"id": "loopback", "label": "System audio (loopback)"},
+    ]
+    mic_label = "Microphone (current device)"
+    try:
+        from .. import native_audio as _na
+        for e in _na.enumerate_endpoints(2):
+            if e.get("default_console") or e.get("default_communications"):
+                name = str(e.get("friendly_name") or "").strip()
+                if name:
+                    mic_label = f"Microphone ({name})"
+                break
+    except Exception:
+        pass
+    inputs.append({"id": "mic", "label": mic_label})
+
+    outputs: list[dict] = []
+    default_out: Optional[int] = None
+    try:
+        import sounddevice as _sd  # type: ignore
+        from ..output.audio_device import windows_default_output
+        try:
+            default_out = windows_default_output(_sd)
+        except Exception:
+            default_out = None
+        hosts = _sd.query_hostapis()
+        for i, info in enumerate(_sd.query_devices()):
+            if int(info.get("max_output_channels", 0) or 0) < 1:
+                continue
+            try:
+                host_name = str(
+                    hosts[int(info.get("hostapi", 0))].get("name", ""))
+            except Exception:
+                host_name = ""
+            if "WASAPI" not in host_name:
+                continue
+            outputs.append({
+                "id": int(i),
+                "label": str(info.get("name", f"device {i}")),
+                "default": default_out is not None
+                and int(i) == int(default_out),
+            })
+    except Exception:
+        pass
+    return {"inputs": inputs, "outputs": outputs}
+
+
 class EverywhereBroker:
     """Named-pipe broker wiring the native host to the Jarvis runtime."""
 
@@ -375,9 +430,8 @@ class EverywhereBroker:
         return bool(ok) and int(n.value) == len(payload)
 
     # ── push channel ──────────────────────────────────────────────────
-    def _on_task_event(self, payload: dict) -> None:
-        """TaskManager callback: broadcast one task_event to all subscribers."""
-        frame = {"protocol": PROTOCOL_ID, "kind": "task_event", **payload}
+    def _push_frame(self, frame: dict) -> None:
+        """Broadcast one frame to all subscribed hosts."""
         try:
             data = encode(frame)
         except ValueError:
@@ -399,6 +453,27 @@ class EverywhereBroker:
                     self._subscribers.pop(h, None)
             debug_log(f"everywhere push dropped clients={len(dead)}",
                       "everywhere")
+
+    def _on_task_event(self, payload: dict) -> None:
+        """TaskManager callback: broadcast one task_event to all subscribers."""
+        self._push_frame({"protocol": PROTOCOL_ID, "kind": "task_event",
+                          **payload})
+
+    def push_overlay_command(self, overlay: str) -> None:
+        """Ask the subscribed host to toggle an overlay window (tray unhide).
+
+        ``overlay`` is one of the host's action slots ("subtitles", "coach",
+        "ocr"). The host shows the window; if it is already visible it stays
+        put (idempotent from the tray's point of view).
+        """
+        overlay = str(overlay or "").strip().lower()
+        if overlay not in ("subtitles", "coach", "ocr"):
+            debug_log(f"everywhere push overlay: unknown {overlay!r}",
+                      "everywhere")
+            return
+        debug_log(f"everywhere push overlay: {overlay}", "everywhere")
+        self._push_frame({"protocol": PROTOCOL_ID, "kind": "overlay",
+                          "overlay": overlay})
 
     # ── dispatch ──────────────────────────────────────────────────────
     def _dispatch(self, obj: dict) -> Optional[dict]:
@@ -730,6 +805,11 @@ class EverywhereBroker:
         """
         from . import coach as coach_mod
         cmd = str(obj.get("command") or "")
+        if cmd == "options":
+            # Device lists for the overlay's sound input/output combos.
+            return make_result(rid, "coach_options", {
+                "audio": audio_device_options(),
+            })
         if cmd == "start":
             service = coach_mod.ensure_coach(
                 self._cfg,
@@ -738,7 +818,9 @@ class EverywhereBroker:
                 on_event=self._queue_coach_event)
             service.update_settings(
                 answer_language=obj.get("answer_language"),
-                domain_hint=obj.get("domain_hint"))
+                domain_hint=obj.get("domain_hint"),
+                audio_input=obj.get("audio_input"),
+                audio_output=obj.get("audio_output"))
             if not service.start():
                 return make_error(rid, "PROVIDER_UNAVAILABLE")
             return make_result(rid, "coach_started", {})
@@ -794,6 +876,7 @@ class EverywhereBroker:
                     lang: asian_context.politeness_options(lang)
                     for lang in ("ko", "ja", "vi", "zh")
                 },
+                "audio": audio_device_options(),
                 "loopback": self._loopback_available(),
                 "cast_url": cast_mod.get_cast_server().url
                 if getattr(self, "_cast_enabled", False) else "",
@@ -821,7 +904,9 @@ class EverywhereBroker:
             service.update_settings(
                 source=obj.get("source"), target=obj.get("target"),
                 live_audio=obj.get("live_audio"),
-                politeness=obj.get("politeness"))
+                politeness=obj.get("politeness"),
+                audio_input=obj.get("audio_input"),
+                audio_output=obj.get("audio_output"))
             if not service.start():
                 return make_error(rid, "PROVIDER_UNAVAILABLE")
             return make_result(rid, "subtitles_started", {})

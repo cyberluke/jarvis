@@ -107,6 +107,23 @@ def set_terminal_bridge(instance) -> None:
 # over the current-user named pipe. Voice and toolbar share this broker.
 _global_everywhere_broker = None
 
+
+def request_overlay(overlay: str) -> None:
+    """Tray-menu entry: ask the Everywhere host to open an overlay window.
+
+    The host shows the window (idempotent — a visible window stays put, a
+    hidden one is revealed). Fail-open: no broker, no host → nothing happens.
+    """
+    broker = _global_everywhere_broker
+    if broker is None:
+        debug_log(f"overlay request {overlay}: broker not running", "everywhere")
+        return
+    try:
+        broker.push_overlay_command(overlay)
+    except Exception as exc:
+        debug_log(f"overlay request {overlay} failed: {exc}", "everywhere")
+
+
 def get_everywhere_broker():
     """Return the Everywhere broker (or None when disabled)."""
     return _global_everywhere_broker

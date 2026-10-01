@@ -983,7 +983,8 @@ class PiperTTS:
 
     def speak(self, text: str, completion_callback: Optional[Callable[[], None]] = None,
               duration_callback: Optional[Callable[[float], None]] = None,
-              language: Optional[str] = None) -> None:
+              language: Optional[str] = None,
+              output_device: Optional[int] = None) -> None:
         if not self.enabled or not text.strip():
             return
         # Lazy start the worker thread
@@ -994,7 +995,7 @@ class PiperTTS:
         # Preprocess text for speech
         processed_text = _preprocess_for_speech(text)
         try:
-            self._q.put_nowait((processed_text, language))
+            self._q.put_nowait((processed_text, language, output_device))
         except Exception:
             pass
 
@@ -1025,19 +1026,23 @@ class PiperTTS:
                 continue
             if not item:
                 continue
-            if isinstance(item, tuple):
+            if isinstance(item, tuple) and len(item) == 3:
+                text, language, output_device = item
+            elif isinstance(item, tuple):
                 text, language = item
+                output_device = None
             else:
-                text, language = item, None
+                text, language, output_device = item, None, None
             if not text:
                 continue
             try:
-                self._speak_once(text, language)
+                self._speak_once(text, language, output_device)
             except Exception as e:
                 debug_log(f"Piper TTS error in _speak_once: {e}", "tts")
                 continue
 
-    def _speak_once(self, text: str, language: Optional[str] = None) -> None:
+    def _speak_once(self, text: str, language: Optional[str] = None,
+                    output_device: Optional[int] = None) -> None:
         self._is_speaking.set()
         self._last_spoken_text = text
         self._should_interrupt.clear()
@@ -1138,8 +1143,9 @@ class PiperTTS:
             # Resolve at playback time so a Windows default-device change is
             # picked up without restarting the daemon. On Windows this is the
             # WASAPI multimedia default used by Edge, never an implicit ASIO or
-            # WDM-KS fallback.
-            output_device = windows_default_output(sd)
+            # WDM-KS fallback. An explicit overlay-selected device wins.
+            if output_device is None:
+                output_device = windows_default_output(sd)
 
             # The WASAPI host only opens at the endpoint's mix-format rate
             # (otherwise PortAudio returns paInvalidSampleRate / -9997), so

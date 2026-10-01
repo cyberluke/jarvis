@@ -2007,6 +2007,18 @@ class JarvisSystemTray:
         """Create the system tray context menu."""
         self.menu = QMenu()
 
+        # Overlay windows: reveal a hidden subtitles/coach overlay (or open
+        # it when it was closed). The host shows the window via the pipe.
+        self.subtitles_overlay_action = QAction("🪟 Subtitles Overlay")
+        self.subtitles_overlay_action.triggered.connect(
+            lambda: self._request_overlay("subtitles"))
+        self.menu.addAction(self.subtitles_overlay_action)
+        self.coach_overlay_action = QAction("🎤 Coach Overlay")
+        self.coach_overlay_action.triggered.connect(
+            lambda: self._request_overlay("coach"))
+        self.menu.addAction(self.coach_overlay_action)
+        self.menu.addSeparator()
+
         # View logs action
         self.logs_action = QAction("📝 View Logs")
         self.logs_action.triggered.connect(self.show_log_viewer)
@@ -2416,6 +2428,15 @@ class JarvisSystemTray:
             _ = get_jarvis_state()  # initialises IDLE/ASLEEP file immediately
         except Exception:
             pass
+
+    def _request_overlay(self, overlay: str) -> None:
+        """Tray menu: open/reveal an Everywhere overlay via the daemon."""
+        try:
+            from jarvis import daemon
+
+            daemon.request_overlay(overlay)
+        except Exception as exc:
+            debug_log(f"overlay request {overlay} failed: {exc}", "desktop")
 
     def show_log_viewer(self) -> None:
         """Show the log viewer window and bring it to front.

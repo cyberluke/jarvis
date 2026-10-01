@@ -53,11 +53,15 @@ public sealed class EverywherePipeClient
 
     // Session health: the broker's persistent-session thread can be starved
     // (the voice pipeline hogs the daemon GIL, delaying pipe delivery by
-    // seconds). A periodic ping proves the session is alive; a missing pong
-    // forces a reconnect, which also clears a wedged session. The cycle is
-    // deliberately slow: a churning reconnect loop makes a slow broker worse.
-    private const int HealthPingIntervalMs = 15000;
-    private const int HealthPongTimeoutMs = 45000;
+    // tens of seconds). A periodic ping proves the session is alive; a
+    // missing pong forces a reconnect, which also clears a wedged session.
+    // The thresholds are deliberately SLOW: a churning reconnect loop (the
+    // observed behaviour with a 15 s ping / 4 s timeout) resets the session
+    // every minute and kills overlay round-trips on a slow-but-alive broker.
+    // The broker answers pings instantly when its thread gets the GIL, so a
+    // reconnect is only justified when the session is dead for minutes.
+    private const int HealthPingIntervalMs = 20000;
+    private const int HealthPongTimeoutMs = 180000;
     private long _lastPongTick;
 
     private long LastPongTick
@@ -125,7 +129,7 @@ public sealed class EverywherePipeClient
 
     private void SelfWatchdogLoop()
     {
-        const int QuietMs = 60000;
+        const int QuietMs = 240000;
         while (_running)
         {
             Thread.Sleep(5000);
@@ -205,7 +209,7 @@ public sealed class EverywherePipeClient
     /// <summary>Blocking round-trip for the legacy overlays (subtitles,
     /// coach, OCR selector). Never call from the UI thread with a slow
     /// request; these commands are answered immediately by the broker.</summary>
-    public JsonElement? RoundTrip(JsonElement request, int timeoutMs = 15000)
+    public JsonElement? RoundTrip(JsonElement request, int timeoutMs = 25000)
     {
         try
         {
@@ -282,7 +286,7 @@ public sealed class EverywherePipeClient
                 };
                 EverywhereApp.Log(
                     $"pipe health: ping sent rid={rid} idle={idle}ms");
-                _ = RoundTripAsync(JsonSerializer.SerializeToElement(ping), 4000)
+                _ = RoundTripAsync(JsonSerializer.SerializeToElement(ping), 20000)
                     .ContinueWith(t =>
                     {
                         if (t.Status == TaskStatus.RanToCompletion
