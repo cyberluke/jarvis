@@ -2164,6 +2164,27 @@ class VoiceListener(threading.Thread):
             return
         self.presence_coordinator.on_conversation_started()
 
+        # Desktop control plane voice routing (control_plane.spec.md): an
+        # utterance explicitly addressed to a v271 app (alias mention,
+        # "v271", or a continuity follow-up) is dispatched to the paired
+        # browser instead of the local reply engine. The browser runs its
+        # own normal v271 turn; Toastovač speaks a short confirmation.
+        try:
+            from ..daemon import get_control_plane
+
+            _cp = get_control_plane()
+            if _cp is not None and _cp.handle_voice_query(
+                query,
+                tts=self.tts,
+                language=self._last_detected_language,
+            ):
+                return
+        except Exception as _cp_exc:
+            debug_log(
+                f"control plane voice routing error (non-fatal): {_cp_exc}",
+                "control_plane",
+            )
+
         # Reply-generation gate: while an LLM reply is being generated, a new
         # STT turn must NOT interrupt it. Consecutive Voice PE STT results
         # (including empty/noise from a reopened continued-conversation mic)
@@ -2895,6 +2916,13 @@ class VoiceListener(threading.Thread):
             "tostováč",
             "tostovači",
             "tostováči",
+            # Whisper often drops the first syllable: "stováč" / "stovac".
+            "stovac",
+            "stovač",
+            "stováč",
+            "stováči",
+            "stovaci",
+            "stovači",
         }
         aliases.update(str(a) for a in getattr(self.cfg, "wake_aliases", []) or [])
         aliases.update(str(a) for a in BRANDING.get("wake_words", []) or [])
@@ -3132,6 +3160,30 @@ class VoiceListener(threading.Thread):
         ``data``/enhanced channel 0.
         """
         return LocalMicFrame(chunk)
+
+    def set_vad_aggressiveness(self, level: int) -> bool:
+        """Rebuild the WebRTC VAD at a new aggressiveness (0-3).
+
+        Called by the Voice PE profile application. Returns False when the
+        VAD backend is unavailable, so callers can mark the knob
+        ``unsupported`` instead of pretending it applied.
+        """
+        try:
+            level = int(level)
+            if level < 0 or level > 3:
+                level = 2
+        except (TypeError, ValueError):
+            level = 2
+        self.cfg.vad_aggressiveness = level
+        if webrtcvad is None or not bool(getattr(self.cfg, "vad_enabled", True)):
+            self._vad = None
+            return False
+        try:
+            self._vad = webrtcvad.Vad(level)
+            return True
+        except Exception:
+            self._vad = None
+            return False
 
     def pad_until_endpoint(
         self, stream=LOCAL_STREAM, source: str = AUDIO_SOURCE_LOCAL

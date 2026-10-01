@@ -30,9 +30,9 @@ import math
 import time as _time
 from enum import Enum
 from typing import Optional
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication, QLabel
-from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient
-from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QApplication, QLabel, QMenu
+from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPainterPath, QLinearGradient, QRadialGradient, QAction, QCursor
+from PyQt6.QtCore import Qt, QTimer, QPointF, pyqtSignal, QObject, QPoint, QRectF
 
 
 class Expression(Enum):
@@ -300,13 +300,30 @@ class LowPolyFaceWidget(QWidget):
 
     def _apply_state(self, new_state: JarvisState) -> None:
         now = _time.monotonic() - self._t0
-        if new_state != self._prev_state:
+        prev = self._prev_state
+        if new_state != prev:
             if new_state == JarvisState.WAKE:
                 self._wake_at = now
             elif new_state == JarvisState.SUCCESS:
                 self._success_at = now
             elif new_state == JarvisState.ERROR:
                 self._error_until = now + 1.2
+            try:
+                from desktop_app.toaster_universe.types import WorldEvent
+                from desktop_app.toaster_universe.world import get_world
+
+                world = get_world()
+                t = _time.monotonic()
+                if new_state == JarvisState.SPEAKING:
+                    world.bus.emit(WorldEvent.VOICE_SPEAK_START, t, source="main_toaster")
+                elif prev == JarvisState.SPEAKING:
+                    world.bus.emit(WorldEvent.VOICE_SPEAK_END, t, source="main_toaster")
+                if new_state in {JarvisState.THINKING, JarvisState.TOOL}:
+                    world.bus.emit(WorldEvent.AGENT_REPLY_START, t, source="main_toaster")
+                elif new_state in {JarvisState.SUCCESS, JarvisState.IDLE, JarvisState.ERROR}:
+                    world.bus.emit(WorldEvent.AGENT_REPLY_END, t, source="main_toaster")
+            except Exception:
+                pass
         self._prev_state = new_state
         self._jarvis_state = new_state
 
@@ -321,6 +338,24 @@ class LowPolyFaceWidget(QWidget):
     def set_expression(self, expression: Expression):
         if expression != self._expression:
             self._expression = expression
+            try:
+                from desktop_app.toaster_universe.types import ToasterAction
+                from desktop_app.toaster_universe.world import get_world
+
+                mapping = {
+                    Expression.HAPPY: ToasterAction.SMILE,
+                    Expression.SAD: ToasterAction.FROWN,
+                    Expression.THINKING: ToasterAction.DEADPAN_STARE,
+                    Expression.SURPRISED: ToasterAction.WAKE_FLASH,
+                    Expression.CURIOUS: ToasterAction.LOOK_AT_CURSOR,
+                    Expression.EXCITED: ToasterAction.BOUNCE,
+                    Expression.CONCERNED: ToasterAction.SMIRK,
+                }
+                action = mapping.get(expression)
+                if action is not None:
+                    get_world().play_action(action)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     # Animation tick
@@ -359,6 +394,7 @@ class LowPolyFaceWidget(QWidget):
         else:
             self._hover_scale = self._hover_target
 
+        self.sync_world_anchors()
         self.update()
 
     # ------------------------------------------------------------------ #
@@ -384,6 +420,14 @@ class LowPolyFaceWidget(QWidget):
         except Exception:
             return 0.0
 
+    def _character_form_id(self) -> str:
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            return str(get_world().get_character_form() or "classic_toaster")
+        except Exception:
+            return "classic_toaster"
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -406,6 +450,15 @@ class LowPolyFaceWidget(QWidget):
         right, bottom = cx + body_w / 2, cy + body_h / 2
 
         op = 0.35 + 0.65 * activation  # activation-driven opacity
+        night = False
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            night = bool(getattr(get_world(), "night_mode", False))
+        except Exception:
+            night = False
+        if night:
+            op *= 0.72
 
         # Breathing scale (IDLE/LISTENING): tiny, slow.
         breathe = 1.0
@@ -435,15 +488,20 @@ class LowPolyFaceWidget(QWidget):
                 self._click_anim = ""
                 self._click_anim_start = None
 
-        # Combined scale: breathing * hover * click x-pop.
-        combined = breathe * hover * (1.0 + click_sx)
+        # Combined scale: breathing * hover * click x-pop + world jelly.
+        soul = self._world_soul()
+        jelly = soul.jelly if soul is not None else 0.0
+        shimmer = soul.shimmer if soul is not None else 0.0
+        look_x = soul.look.x if soul is not None else 0.0
+        look_y = soul.look.y if soul is not None else 0.0
+        combined = breathe * hover * (1.0 + click_sx + jelly * 0.06)
         painter.save()
-        painter.translate(cx + click_dx, cy + click_dy)
+        painter.translate(cx + click_dx + look_x * 2.0, cy + click_dy + math.sin(t * 11.0) * shimmer * 1.4)
         painter.scale(*_pair(combined))
         if click_rot:
             painter.rotate(click_rot)  # degrees in Qt
-        if click_sy:
-            painter.scale(1.0, 1.0 + click_sy)
+        if click_sy or jelly:
+            painter.scale(1.0 + jelly * 0.08, 1.0 + click_sy - jelly * 0.10)
         painter.translate(-cx, -cy)
 
         # ---- Glow (warm heating; red briefly on ERROR) ----
@@ -462,132 +520,40 @@ class LowPolyFaceWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(cx, cy), body_w * 0.85, body_w * 0.85)
 
-        # ---- Toast slices behind the slots (rise per state) ----
-        slice_w = body_w * 0.30
-        slice_h = body_h * 0.26
-        gap = body_w * 0.10
-        slice_top = top - body_h * 0.06
-        rise = 0.0
-        if self._jarvis_state == JarvisState.LISTENING:
-            rise = slice_h * 0.30
-        elif self._jarvis_state == JarvisState.SUCCESS:
-            # One-time pop: overshoot then settle.
-            since = t - (self._success_at if self._success_at is not None else t)
-            if since < 0.6:
-                rise = slice_h * 0.9 * math.sin(min(1.0, since / 0.6) * math.pi * 1.15) + slice_h * 0.35
-            else:
-                rise = slice_h * 0.35
-        for sgn in (-1, 1):
-            sx = cx + sgn * (slice_w / 2 + gap / 2)
-            rect_top = slice_top - rise
-            toast_pen = QPen(QColor("#c98f3d"), 2)
-            painter.setOpacity(op)
-            painter.setPen(toast_pen)
-            painter.setBrush(QBrush(QColor("#e8b96b")))
-            painter.drawRoundedRect(
-                QRectF_(sx - slice_w / 2, rect_top, slice_w, slice_h),
-                slice_w * 0.18, slice_h * 0.18,
+        form_id = self._character_form_id()
+        if form_id != "classic_toaster":
+            self._draw_character_form_body(
+                painter, form_id, cx, cy, left, top, right, bottom, body_w, body_h, op, t,
             )
-            # Crust inner line
-            inner = QPen(QColor("#b0782f"), 1)
-            painter.setPen(inner)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(
-                QRectF_(sx - slice_w / 2 + 3, rect_top + 3, slice_w - 6, slice_h - 6),
-                slice_w * 0.14, slice_h * 0.14,
+        else:
+            self._draw_classic_toaster_body(
+                painter, cx, cy, left, top, right, bottom, body_w, body_h, op, t, soul,
             )
 
-        # ---- Toaster body (polished metal gradient) ----
-        grad = QLinearGradient(left, top, right, bottom)
-        grad.setColorAt(0.0, self.BODY_LIGHT)
-        grad.setColorAt(0.55, self.BODY_DARK)
-        grad.setColorAt(1.0, self.BODY_LIGHT)
-        painter.setOpacity(op)
-        painter.setPen(QPen(QColor("#5f666d"), 2))
-        painter.setBrush(QBrush(grad))
-        painter.drawRoundedRect(QRectF_(left, top, body_w, body_h), 14, 12)
-
-        # Two bread slots on the top edge.
-        slot_h = body_h * 0.10
-        for sgn in (-1, 1):
-            sx = cx + sgn * (slice_w / 2 + gap / 2)
-            painter.setPen(QPen(QColor("#3a4046"), 1))
-            painter.setBrush(QBrush(QColor(20, 23, 30, int(230 * op))))
-            painter.drawRoundedRect(
-                QRectF_(sx - slice_w / 2 + 4, top + 2, slice_w - 8, slot_h),
-                slot_h * 0.5, slot_h * 0.5,
-            )
-
-        # Lever (front-right side). Pressed down in WAKE, up otherwise.
-        lever_x = right - body_w * 0.08
-        track_top = top + body_h * 0.22
-        track_bottom = top + body_h * 0.62
-        painter.setPen(QPen(QColor("#5f666d"), 2))
-        painter.drawLine(QPointF(lever_x, track_top), QPointF(lever_x, track_bottom))
-        pressed = 1.0
-        if self._jarvis_state == JarvisState.WAKE:
-            since = t - (self._wake_at if self._wake_at is not None else t)
-            # Quick click: down (0.12 s), hold, rebound (0.35 s total).
-            if since < 0.35:
-                pressed = 1.0 if since > 0.25 else 0.0 + (since / 0.28) * 0.15
-        knob_y = track_bottom - (track_bottom - track_top) * (0.35 + 0.65 * pressed)
-        painter.setBrush(QBrush(self.PRIMARY_COLOR))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(lever_x, knob_y), body_w * 0.035, body_w * 0.035)
-
-        # ---- Heating elements (inside body, below slots) ----
+        # ---- Face: eyes + mouth integrated into the body ----
         elem_top = top + body_h * 0.16
         elem_h = body_h * 0.055
         elem_gap = body_h * 0.045
-        element_color = QColor(self.ERROR_COLOR) if self._jarvis_state == JarvisState.ERROR else self.SECONDARY_COLOR
-        fill = 0.0
-        if self._jarvis_state == JarvisState.THINKING:
-            # Progressive: three lines fill in sequence over ~1.8 s.
-            if self._wake_at is None:
-                self._wake_at = t  # anchor for the loop cycle
-            cycle = (t % 1.8) / 1.8
-            fill = cycle
-            painter.setPen(QPen(element_color, 2))
-            for i in range(3):
-                frac = max(0.0, min(1.0, fill * 3 - i))
-                yy = elem_top + (elem_h + elem_gap) * i
-                x0 = cx - body_w * 0.30
-                x1 = x0 + body_w * 0.60 * frac
-                if x1 > x0:
-                    painter.drawLine(QPointF(x0, yy), QPointF(x1, yy))
-        else:
-            painter.setOpacity(op * 0.9)
-            painter.setPen(QPen(element_color, 2))
-            for i in range(3):
-                yy = elem_top + (elem_h + elem_gap) * i
-                painter.drawLine(
-                    QPointF(cx - body_w * 0.30, yy),
-                    QPointF(cx + body_w * 0.30, yy),
-                )
-
-        # ---- Tool execution: running dot across a strip ----
-        if self._jarvis_state == JarvisState.TOOL:
-            strip_y = bottom - body_h * 0.10
-            painter.setPen(QPen(QColor("#3a4046"), 1))
-            painter.drawLine(QPointF(cx - body_w * 0.32, strip_y),
-                             QPointF(cx + body_w * 0.32, strip_y))
-            prog = (t % 1.2) / 1.2
-            dot_x = cx - body_w * 0.32 + (body_w * 0.64) * prog
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(self.PRIMARY_COLOR))
-            painter.drawEllipse(QPointF(dot_x, strip_y), 3.0, 3.0)
-
-        # ---- Face: eyes + mouth integrated into the body ----
         eye_y = elem_top + 3 * (elem_h + elem_gap) + body_h * 0.04
         eye_r = body_w * 0.045
         blink = self._blink_factor() if not self._reduced_motion else 1.0
+        stare = soul.stare if soul is not None else 0.0
+        pose = soul.pose if soul is not None else None
+        if pose is not None and pose.blink > blink:
+            blink = pose.blink
+        if stare > 0.5:
+            blink = 0.0
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(self.PRIMARY_COLOR))
+        yaw = pose.face_yaw if pose is not None else 0.0
         for sgn in (-1, 1):
-            ex = cx + sgn * body_w * 0.16
+            ex = cx + sgn * body_w * 0.16 + look_x * body_w * 0.045 + yaw * body_w * 0.03
+            ey = eye_y + look_y * body_h * 0.03
             er = eye_r * (1.0 - blink * 0.85)
+            if soul is not None and soul.blink > 0.5 and stare <= 0.5:
+                er *= 0.2
             if er > 0.4:
-                painter.drawEllipse(QPointF(ex, eye_y), er, max(er, 0.8))
+                painter.drawEllipse(QPointF(ex, ey), er, max(er, 0.8))
 
         # Mouth: waveform follows level when known, else gentle sine.
         level = self._level()
@@ -597,6 +563,13 @@ class LowPolyFaceWidget(QWidget):
         if self._jarvis_state == JarvisState.SPEAKING and not self._reduced_motion:
             amp = level or (0.35 + 0.35 * math.sin(t * 5.2))
             amp *= body_h * 0.045 + 1.2
+        mouth_shape = soul.mouth if soul is not None else 0.0
+        if self._expression is Expression.HAPPY:
+            mouth_shape = max(mouth_shape, 0.85)
+        elif self._expression is Expression.SAD:
+            mouth_shape = min(mouth_shape, -0.75)
+        elif self._expression is Expression.CONCERNED:
+            mouth_shape = 0.55 if mouth_shape == 0.0 else mouth_shape
         painter.setOpacity(op)
         path = QPainterPath()
         n = 36
@@ -608,6 +581,12 @@ class LowPolyFaceWidget(QWidget):
             edge = 1.0 - abs(tt - 0.5) * 1.2
             if not self._reduced_motion and self._jarvis_state == JarvisState.SPEAKING:
                 yy = mouth_y + amp * edge * math.sin((tt * 6.0 + t * 4.0) * math.pi) 
+            elif mouth_shape > 0.05:
+                smile = 1.0 if mouth_shape > 0.7 else 0.45
+                smirk = 0.35 if 0.4 < mouth_shape < 0.7 and tt > 0.5 else 0.0
+                yy = mouth_y + (4.8 * smile + smirk * 6.0) * edge
+            elif mouth_shape < -0.05:
+                yy = mouth_y - 4.2 * edge
             else:
                 yy = mouth_y + 2.5 * edge
             path.lineTo(x, yy)
@@ -641,8 +620,34 @@ class LowPolyFaceWidget(QWidget):
                 14, 12,
             )
 
+        if soul is not None:
+            if soul.arc > 0.05:
+                painter.setOpacity(min(0.7, soul.arc))
+                painter.setPen(QPen(QColor(125, 211, 252, 210), 2))
+                painter.drawLine(QPointF(left + 8, top + 10), QPointF(cx - 6, cy))
+                painter.drawLine(QPointF(right - 8, top + 14), QPointF(cx + 8, cy + 6))
+            if soul.steam > 0.04 or (soul.pose and soul.pose.smoke > 0.04):
+                smoke = max(soul.steam, soul.pose.smoke if soul.pose else 0.0)
+                painter.setOpacity(min(0.4, smoke))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(QColor(203, 213, 225, 140)))
+                painter.drawEllipse(QPointF(cx - 10, top - 8), 7, 5)
+                painter.drawEllipse(QPointF(cx + 8, top - 14), 6, 4)
+            if soul.shockwave > 0.04:
+                painter.setOpacity(min(0.35, soul.shockwave))
+                painter.setPen(QPen(QColor(251, 191, 36, 180), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                r = body_w * (0.35 + soul.shockwave * 0.25)
+                painter.drawEllipse(QPointF(cx, cy), r, r * 0.78)
+            if soul.glitch > 0.04:
+                painter.setOpacity(min(0.35, soul.glitch))
+                painter.setPen(QPen(QColor(167, 139, 250, 180), 1.5))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF_(left + 6, top + 4, body_w - 12, body_h - 8), 10, 8)
         painter.restore()
         painter.setOpacity(1.0)
+        if soul is not None and soul.crumbs > 0.04:
+            self._draw_soul_crumbs(painter, cx, bottom, body_w, soul.crumbs)
 
         # ---- Reason label for proactive speech (why did it just speak?) ----
         try:
@@ -662,9 +667,235 @@ class LowPolyFaceWidget(QWidget):
 
         painter.end()
 
+    def _draw_classic_toaster_body(
+        self, painter, cx, cy, left, top, right, bottom, body_w, body_h, op, t, soul,
+    ) -> None:
+        slice_w = body_w * 0.30
+        slice_h = body_h * 0.26
+        gap = body_w * 0.10
+        slice_top = top - body_h * 0.06
+        rise = 0.0
+        if self._jarvis_state == JarvisState.LISTENING:
+            rise = slice_h * 0.30
+        elif self._jarvis_state == JarvisState.SUCCESS:
+            since = t - (self._success_at if self._success_at is not None else t)
+            if since < 0.6:
+                rise = slice_h * 0.9 * math.sin(min(1.0, since / 0.6) * math.pi * 1.15) + slice_h * 0.35
+            else:
+                rise = slice_h * 0.35
+        for sgn in (-1, 1):
+            sx = cx + sgn * (slice_w / 2 + gap / 2)
+            rect_top = slice_top - rise
+            painter.setOpacity(op)
+            painter.setPen(QPen(QColor("#c98f3d"), 2))
+            painter.setBrush(QBrush(QColor("#e8b96b")))
+            painter.drawRoundedRect(QRectF(sx - slice_w / 2, rect_top, slice_w, slice_h), slice_w * 0.18, slice_h * 0.18)
+            painter.setPen(QPen(QColor("#b0782f"), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                QRectF(sx - slice_w / 2 + 3, rect_top + 3, slice_w - 6, slice_h - 6),
+                slice_w * 0.14, slice_h * 0.14,
+            )
+        grad = QLinearGradient(left, top, right, bottom)
+        grad.setColorAt(0.0, self.BODY_LIGHT)
+        grad.setColorAt(0.55, self.BODY_DARK)
+        grad.setColorAt(1.0, self.BODY_LIGHT)
+        painter.setOpacity(op)
+        painter.setPen(QPen(QColor("#5f666d"), 2))
+        painter.setBrush(QBrush(grad))
+        painter.save()
+        painter.setOpacity(0.22 * op)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(15, 17, 23, 110)))
+        painter.drawEllipse(QPointF(cx, bottom + body_h * 0.04), body_w * 0.38, body_h * 0.07)
+        painter.restore()
+        painter.setBrush(QBrush(grad))
+        painter.drawRoundedRect(QRectF(left, top, body_w, body_h), 14, 12)
+        slot_h = body_h * 0.10
+        slot_glow = soul.slot_glow if soul is not None else 0.0
+        for sgn in (-1, 1):
+            sx = cx + sgn * (slice_w / 2 + gap / 2)
+            painter.setPen(QPen(QColor("#3a4046"), 1))
+            painter.setBrush(QBrush(QColor(20, 23, 30, int(230 * op))))
+            painter.drawRoundedRect(QRectF(sx - slice_w / 2 + 4, top + 2, slice_w - 8, slot_h), slot_h * 0.5, slot_h * 0.5)
+            if slot_glow > 0.04:
+                painter.setPen(QPen(QColor(251, 191, 36, int(90 + 120 * slot_glow)), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(QRectF(sx - slice_w / 2 + 2, top, slice_w - 4, slot_h + 2), slot_h * 0.5, slot_h * 0.5)
+        lever_x = right - body_w * 0.08
+        track_top = top + body_h * 0.22
+        track_bottom = top + body_h * 0.62
+        painter.setPen(QPen(QColor("#5f666d"), 2))
+        painter.drawLine(QPointF(lever_x, track_top), QPointF(lever_x, track_bottom))
+        pressed = 1.0
+        if self._jarvis_state == JarvisState.WAKE:
+            since = t - (self._wake_at if self._wake_at is not None else t)
+            if since < 0.35:
+                pressed = 1.0 if since > 0.25 else (since / 0.28) * 0.15
+        knob_y = track_bottom - (track_bottom - track_top) * (0.35 + 0.65 * pressed)
+        painter.setBrush(QBrush(self.PRIMARY_COLOR))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(lever_x, knob_y), body_w * 0.035, body_w * 0.035)
+        elem_top = top + body_h * 0.16
+        elem_h = body_h * 0.055
+        elem_gap = body_h * 0.045
+        element_color = QColor(self.ERROR_COLOR) if self._jarvis_state == JarvisState.ERROR else self.SECONDARY_COLOR
+        if self._jarvis_state == JarvisState.THINKING:
+            if self._wake_at is None:
+                self._wake_at = t
+            fill = (t % 1.8) / 1.8
+            painter.setPen(QPen(element_color, 2))
+            for i in range(3):
+                frac = max(0.0, min(1.0, fill * 3 - i))
+                yy = elem_top + (elem_h + elem_gap) * i
+                x0 = cx - body_w * 0.30
+                x1 = x0 + body_w * 0.60 * frac
+                if x1 > x0:
+                    painter.drawLine(QPointF(x0, yy), QPointF(x1, yy))
+        else:
+            painter.setOpacity(op * 0.9)
+            painter.setPen(QPen(element_color, 2))
+            for i in range(3):
+                yy = elem_top + (elem_h + elem_gap) * i
+                painter.drawLine(QPointF(cx - body_w * 0.30, yy), QPointF(cx + body_w * 0.30, yy))
+        if self._jarvis_state == JarvisState.TOOL:
+            strip_y = bottom - body_h * 0.10
+            painter.setPen(QPen(QColor("#3a4046"), 1))
+            painter.drawLine(QPointF(cx - body_w * 0.32, strip_y), QPointF(cx + body_w * 0.32, strip_y))
+            prog = (t % 1.2) / 1.2
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(self.PRIMARY_COLOR))
+            painter.drawEllipse(QPointF(cx - body_w * 0.32 + (body_w * 0.64) * prog, strip_y), 3.0, 3.0)
+
+    def _draw_character_form_body(
+        self, painter, form_id, cx, cy, left, top, right, bottom, body_w, body_h, op, t,
+    ) -> None:
+        painter.setOpacity(op)
+        painter.save()
+        painter.setOpacity(0.22 * op)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(15, 17, 23, 110)))
+        painter.drawEllipse(QPointF(cx, bottom + body_h * 0.04), body_w * 0.38, body_h * 0.07)
+        painter.restore()
+        if form_id == "rice_cooker_zen":
+            painter.setPen(QPen(QColor("#94a3b8"), 2))
+            painter.setBrush(QBrush(QColor("#f8fafc")))
+            painter.drawEllipse(QPointF(cx, cy + body_h * 0.08), body_w * 0.42, body_h * 0.36)
+            painter.drawEllipse(QPointF(cx, top + body_h * 0.18), body_w * 0.26, body_h * 0.16)
+            painter.setBrush(QBrush(QColor(248, 250, 252, 160)))
+            painter.drawEllipse(QPointF(cx - 10, top - 4), 8, 6)
+            painter.drawEllipse(QPointF(cx + 12, top - 10), 6, 5)
+        elif form_id == "microwave":
+            painter.setPen(QPen(QColor("#64748b"), 2))
+            painter.setBrush(QBrush(QColor("#94a3b8")))
+            painter.drawRoundedRect(QRectF(left, top, body_w, body_h), 8, 8)
+            painter.setBrush(QBrush(QColor("#0f172a")))
+            painter.drawRoundedRect(QRectF(left + body_w * 0.10, top + body_h * 0.16, body_w * 0.56, body_h * 0.52), 4, 4)
+            pulse = 0.45 + 0.35 * math.sin(t * 3.2)
+            painter.setBrush(QBrush(QColor(196, 181, 253, int(90 + 90 * pulse))))
+            painter.drawEllipse(QPointF(cx - body_w * 0.08, cy), body_w * 0.16, body_h * 0.14)
+            painter.setPen(QPen(QColor("#cbd5e1"), 1))
+            for i in range(4):
+                yy = top + body_h * 0.22 + i * body_h * 0.10
+                painter.drawLine(QPointF(right - body_w * 0.18, yy), QPointF(right - body_w * 0.06, yy))
+        elif form_id == "air_fryer":
+            painter.setPen(QPen(QColor("#44403c"), 2))
+            painter.setBrush(QBrush(QColor("#78716c")))
+            painter.drawRoundedRect(QRectF(left + body_w * 0.08, top, body_w * 0.84, body_h), 18, 16)
+            heat = 0.4 + 0.4 * math.sin(t * 4.0)
+            painter.setPen(QPen(QColor("#f59e0b"), 1.4))
+            painter.setBrush(QBrush(QColor(251, 191, 36, int(70 + 110 * heat))))
+            painter.drawEllipse(QPointF(cx, cy + body_h * 0.08), body_w * 0.22, body_h * 0.16)
+            painter.setPen(QPen(QColor("#22d3ee"), 1.2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy + body_h * 0.08), body_w * 0.28, body_h * 0.20)
+        elif form_id == "espresso":
+            painter.setPen(QPen(QColor("#44403c"), 2))
+            painter.setBrush(QBrush(QColor("#1c1917")))
+            painter.drawRoundedRect(QRectF(left + body_w * 0.12, top + body_h * 0.08, body_w * 0.76, body_h * 0.78), 6, 6)
+            painter.setBrush(QBrush(QColor("#fbbf24")))
+            painter.drawRoundedRect(QRectF(cx - body_w * 0.08, top + body_h * 0.18, body_w * 0.16, body_h * 0.10), 3, 3)
+            painter.setPen(QPen(QColor("#a8a29e"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(cx, bottom - body_h * 0.12), body_w * 0.16, body_h * 0.08)
+        elif form_id == "oven":
+            painter.setPen(QPen(QColor("#44403c"), 2))
+            painter.setBrush(QBrush(QColor("#57534e")))
+            painter.drawRoundedRect(QRectF(left, top, body_w, body_h), 6, 6)
+            painter.setBrush(QBrush(QColor("#1c1917")))
+            painter.drawRoundedRect(QRectF(left + body_w * 0.12, top + body_h * 0.18, body_w * 0.76, body_h * 0.52), 3, 3)
+            glow = 0.35 + 0.35 * math.sin(t * 2.0)
+            painter.setBrush(QBrush(QColor(251, 146, 60, int(70 + 90 * glow))))
+            painter.drawRoundedRect(QRectF(left + body_w * 0.18, top + body_h * 0.28, body_w * 0.64, body_h * 0.32), 2, 2)
+        elif form_id == "mini_fridge":
+            painter.setPen(QPen(QColor("#94a3b8"), 2))
+            painter.setBrush(QBrush(QColor("#e2e8f0")))
+            painter.drawRoundedRect(QRectF(left + body_w * 0.10, top, body_w * 0.80, body_h), 8, 8)
+            painter.setPen(QPen(QColor("#64748b"), 2))
+            painter.drawLine(QPointF(cx, top + 8), QPointF(cx, bottom - 8))
+            painter.setBrush(QBrush(QColor("#cbd5e1")))
+            painter.drawRoundedRect(QRectF(right - body_w * 0.22, cy - 8, body_w * 0.08, 16), 2, 2)
+        else:
+            self._draw_classic_toaster_body(
+                painter, cx, cy, left, top, right, bottom, body_w, body_h, op, t, self._world_soul(),
+            )
+
     def _draw_background(self, painter: QPainter, w: int, h: int):
         # Kept for API parity with the legacy widget name set.
         pass
+
+    def _world_soul(self):
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            world = get_world()
+            if not world.cfg.enabled:
+                return None
+            return world.soul
+        except Exception:
+            return None
+
+    def _draw_soul_crumbs(self, painter: QPainter, cx: float, bottom: float, body_w: float, amount: float) -> None:
+        import random as _rng
+
+        painter.save()
+        painter.setOpacity(min(1.0, amount))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor("#c48c40")))
+        seed = int(self._elapsed() * 8)
+        rng = _rng.Random(seed)
+        for _ in range(int(4 + amount * 6)):
+            painter.drawEllipse(
+                QPointF(cx + rng.uniform(-body_w * 0.28, body_w * 0.28), bottom + rng.uniform(2, 16)),
+                1.8,
+                1.3,
+            )
+        painter.restore()
+
+    def sync_world_anchors(self, world=None) -> None:
+        try:
+            from desktop_app.toaster_universe.types import Vec2
+            from desktop_app.toaster_universe.world import get_world
+
+            world = world if world is not None else get_world()
+            if not world.cfg.enabled:
+                return
+            w, h = self.width(), self.height()
+            body_w = min(w, h) * 0.62
+            body_h = body_w * 0.78
+            origin = self.mapToGlobal(self.rect().topLeft())
+            cx = origin.x() + w / 2
+            cy = origin.y() + h / 2 + body_h * 0.06
+            gap = body_w * 0.10
+            slice_w = body_w * 0.30
+            top = cy - body_h / 2
+            world.set_toaster(
+                Vec2(cx, cy),
+                Vec2(cx - (slice_w / 2 + gap / 2), top + 8),
+                Vec2(cx + (slice_w / 2 + gap / 2), top + 8),
+            )
+        except Exception:
+            pass
 
 
 def QRectF_(x, y, w, h):
@@ -705,6 +936,8 @@ class FaceWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
 
         # Hover + click animation state.
         self._hover_t = 0.0
@@ -739,7 +972,32 @@ class FaceWindow(QWidget):
         self._mode_row.setVisible(True)
         self._refresh_mode_buttons()
 
-        # Position on the right side of the screen
+        self._press_global = None
+        self._press_win = None
+        self._did_drag = False
+        self._dragging = False
+        # Position: restore last user drop, else default right-edge dock.
+        self._restore_or_default_position()
+
+    def _restore_or_default_position(self) -> None:
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            world = get_world()
+            if world.cfg.home_anchor_x >= 0 and world.cfg.home_anchor_y >= 0:
+                x = int(world.cfg.home_anchor_x - self.width() / 2)
+                y = int(world.cfg.home_anchor_y - self.height() / 2)
+                screen = QApplication.primaryScreen()
+                if screen is not None:
+                    geo = screen.availableVirtualGeometry() if hasattr(screen, "availableVirtualGeometry") else screen.availableGeometry()
+                    x = max(geo.left(), min(x, geo.right() - 80))
+                    y = max(geo.top(), min(y, geo.bottom() - 80))
+                self.move(x, y)
+                self._home_pos = (x, y)
+                self._skip_entrance_slide = True
+                return
+        except Exception:
+            pass
         self._position_on_right()
 
     def _position_on_right(self):
@@ -797,6 +1055,8 @@ class FaceWindow(QWidget):
             self._refresh_mode_buttons()
         except Exception:
             pass
+        if getattr(self, "_skip_entrance_slide", False):
+            return
         try:
             from PyQt6.QtCore import QPropertyAnimation, QEasingCurve, QPoint
             target_x, target_y = getattr(self, "_home_pos", (self.x(), self.y()))
@@ -816,20 +1076,154 @@ class FaceWindow(QWidget):
         window resize — resizing was the compounding padding bug)."""
         super().enterEvent(event)
         self.face._hover_target = 1.07
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            get_world().note_toaster_hover(True)
+        except Exception:
+            pass
 
     def leaveEvent(self, event):
         super().leaveEvent(event)
         self.face._hover_target = 1.0
 
     def mousePressEvent(self, event):
-        """Click: a random vector animation (drawn in the painter) + a witty
-        Czech line. Different each time."""
+        """Click vs drag: small movement is a click; larger movement is MANUAL_DRAG."""
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_character_menu(event.globalPosition().toPoint())
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._press_global = event.globalPosition().toPoint()
+        self._press_win = self.pos()
+        self._did_drag = False
+        self._dragging = False
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._press_global is None:
+            super().mouseMoveEvent(event)
+            return
+        delta = event.globalPosition().toPoint() - self._press_global
+        threshold = QApplication.startDragDistance()
+        if not self._dragging and (abs(delta.x()) > threshold or abs(delta.y()) > threshold):
+            self._dragging = True
+            self._did_drag = True
+            self.grabMouse()
+            try:
+                from desktop_app.toaster_universe.types import Vec2
+                from desktop_app.toaster_universe.world import get_world
+
+                get_world().begin_drag(Vec2(float(self._press_global.x()), float(self._press_global.y())))
+            except Exception:
+                pass
+        if self._dragging:
+            new_pos = self._press_win + delta
+            self._clamp_to_virtual_desktop(new_pos)
+            self.move(new_pos)
+            try:
+                from desktop_app.toaster_universe.types import Vec2
+                from desktop_app.toaster_universe.world import get_world
+
+                get_world().update_drag(Vec2(float(event.globalPosition().x()), float(event.globalPosition().y())))
+                self.face.sync_world_anchors()
+            except Exception:
+                pass
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._press_global is not None:
+            if self._dragging:
+                self.releaseMouse()
+                try:
+                    from desktop_app.toaster_universe.world import get_world
+
+                    get_world().end_drag(persist=True)
+                    self.face.sync_world_anchors()
+                except Exception:
+                    pass
+                self._home_pos = (self.x(), self.y())
+            elif not self._did_drag:
+                self._fire_click_action()
+            self._press_global = None
+            self._dragging = False
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self._dragging:
+            self.releaseMouse()
+            if self._press_win is not None:
+                self.move(self._press_win)
+            try:
+                from desktop_app.toaster_universe.world import get_world
+
+                get_world().cancel_drag()
+                self.face.sync_world_anchors()
+            except Exception:
+                pass
+            self._press_global = None
+            self._dragging = False
+            return
+        super().keyPressEvent(event)
+
+    def _clamp_to_virtual_desktop(self, pos: QPoint) -> None:
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableVirtualGeometry() if hasattr(screen, "availableVirtualGeometry") else screen.availableGeometry()
+        pos.setX(max(geo.left(), min(pos.x(), geo.right() - 80)))
+        pos.setY(max(geo.top(), min(pos.y(), geo.bottom() - 80)))
+
+    def _show_character_menu(self, global_pos) -> None:
+        try:
+            from desktop_app.toaster_universe.character_forms import list_forms
+            from desktop_app.toaster_universe.world import get_world
+
+            menu = QMenu(self)
+            current = get_world().get_character_form()
+            char_menu = menu.addMenu("Character")
+            for profile in list_forms():
+                act = QAction(profile.display_name, menu)
+                act.setCheckable(True)
+                act.setChecked(profile.id == current)
+                act.triggered.connect(lambda checked=False, fid=profile.id: self._apply_character_form(fid))
+                char_menu.addAction(act)
+            menu.exec(global_pos)
+        except Exception:
+            pass
+
+    def _apply_character_form(self, form_id: str) -> None:
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            get_world().set_character_form(form_id)
+        except Exception:
+            return
+        try:
+            self.face.update()
+        except Exception:
+            pass
+        self.update()
+
+    def _fire_click_action(self) -> None:
         import random
         self.face._click_anim = random.choice(
             ["bounce", "spin", "wiggle", "squash", "pop"])
         self.face._click_anim_start = _time.monotonic()
-        self._show_witty_line(random.choice(self._WITTY_LINES_CS))
+        line = random.choice(self._WITTY_LINES_CS)
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            world = get_world()
+            world.note_toaster_click()
+            if world.soul.line:
+                line = world.soul.line
+        except Exception:
+            pass
+        self._show_witty_line(line)
 
     def _show_witty_line(self, text: str) -> None:
         """Show the witty line in the presence label briefly."""

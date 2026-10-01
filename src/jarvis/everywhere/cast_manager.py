@@ -248,6 +248,10 @@ class CastManager:
     def set_volume(self, volume: float) -> bool:
         """Set volume."""
         return self._cast_sender.set_volume(volume)
+
+    def mute(self) -> bool:
+        """Mute remote Cast volume (session volume, not the local mixer)."""
+        return self._cast_sender.set_volume(0.0)
     
     # ── Status ────────────────────────────────────────────────────────
     @property

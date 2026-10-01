@@ -90,6 +90,7 @@ CATEGORIES = [
     ("features", "✨ Features"),
     ("terminal", "⌨️ Terminal Composer"),
     ("everywhere", "🪟 Everywhere"),
+    ("toaster_world", "🍞 Toastovač World"),
     ("mcps", "🔌 MCP Servers"),
     ("advanced", "🔧 Advanced"),
 ]
@@ -408,9 +409,12 @@ def _build_field_metadata() -> List[FieldMeta]:
       choices=[("NPU", "NPU (recommended)"), ("CPU", "CPU"), ("GPU", "GPU")])
     f("whisper_openvino_runtime_source", "OpenVINO Runtime Source",
       "How the worker finds the runtime: the installed tree (registry / "
-      "setupvars layout) or the exact owner-supplied cp313 wheels.",
+      "setupvars layout), the exact owner-supplied cp313 wheels, or the "
+      "production Python 3.14 NPU lane.",
       "whisper", "choice",
-      choices=[("installed", "Installed tree"), ("wheel", "Owner wheel")])
+      choices=[("installed", "Installed tree"),
+               ("wheel", "Owner wheel"),
+               ("python", "Python 3.14 NPU lane (production)")])
     f("whisper_openvino_runtime_root", "OpenVINO Runtime Root",
       "Optional installed-root override; empty means installer discovery.",
       "whisper", "str", nullable=True)
@@ -793,6 +797,33 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("voice_pe_audio_queue_ms", "Microphone Queue",
       "Backlog ceiling of the audio queue; the oldest blocks are dropped past it",
       "voice_pe", "int", min_val=20, max_val=5000, step=20, suffix="ms")
+    f("voice_pe_profile", "Audio Profile",
+      "Preset of the full audio pipeline (VAD, post-roll, normalizer). "
+      "AUTO inherits the values below; MEETING is used automatically while "
+      "a meeting scribe session runs. Per-device overrides: "
+      "jarvis voice-pe profile <device> <name>",
+      "voice_pe", "choice",
+      choices=[("auto", "Auto (base values)"),
+               ("desk", "Desk"),
+               ("room", "Room"),
+               ("far_field", "Far field"),
+               ("meeting", "Meeting scribe")])
+    f("voice_pe_normalizer_enabled", "Speech-aware Normalizer",
+      "Slowly adapts the satellite gain toward the target while speech is "
+      "present; silence never changes the gain. Bounded max gain + limiter.",
+      "voice_pe", "bool")
+    f("voice_pe_normalizer_target_db", "Normalizer Target Level",
+      "Desired speech RMS level of the normalizer (profile presets tune this)",
+      "voice_pe", "float", min_val=-40.0, max_val=-12.0, step=0.5, suffix="dBFS")
+    f("voice_pe_normalizer_max_gain_db", "Normalizer Max Gain",
+      "Ceiling of the adaptive gain; quiet far-field speech never amplifies past it",
+      "voice_pe", "float", min_val=0.0, max_val=18.0, step=0.5, suffix="dB")
+    f("voice_pe_normalizer_attack_db_per_s", "Normalizer Gain Rate",
+      "How fast the gain may move toward the target per second",
+      "voice_pe", "float", min_val=0.5, max_val=12.0, step=0.5, suffix="dB/s")
+    f("voice_pe_normalizer_limiter_db", "Normalizer Limiter",
+      "Soft ceiling applied after the gain (peaks above it are compressed)",
+      "voice_pe", "float", min_val=-6.0, max_val=0.0, step=0.5, suffix="dBFS")
     f("voice_pe_led_brightness", "LED Ring Brightness",
       "Brightness of the public led_ring light (the voice animations come from "
       "the standard assistant events). Applied to paired satellites live.",
@@ -881,6 +912,79 @@ def _build_field_metadata() -> List[FieldMeta]:
       "Keep unprocessed lane output active instead of replacing it with "
       "silence while the AEC is not converged.",
       "virtual_mic", "bool")
+
+    # --- Toastovač World ---
+    f("toaster_universe_enabled", "World enabled",
+      "Stop autonomous world activity without losing settings.",
+      "toaster_world", "bool")
+    f("toaster_universe_autonomous_characters", "Autonomous characters",
+      "Mini Toast / creature activity without disabling the main Toastovač.",
+      "toaster_world", "bool")
+    f("toaster_universe_character_form", "Character form",
+      "Main Toastovač avatar. World appliances stay independent.",
+      "toaster_world", "choice",
+      choices=[
+          ("classic_toaster", "Classic Toaster — original troublemaker"),
+          ("rice_cooker_zen", "Rice Cooker Zen — calm heat, enlightened carbs"),
+          ("microwave", "Microwave — violet cavity, questionable decisions"),
+          ("air_fryer", "Air Fryer — high velocity crunch"),
+          ("espresso", "Espresso Module — office alignment"),
+          ("oven", "Oven — slow ritual bakery"),
+          ("mini_fridge", "Mini Fridge — late-night larder"),
+      ])
+    f("toaster_universe_lock_character_position", "Lock character position",
+      "Stay at the user-chosen anchor. Manual drag still works. Safety still yields.",
+      "toaster_world", "bool")
+    f("toaster_universe_population_level", "Population level",
+      "Friendly baseline for Mini Toast ecology. Hard safety caps stay in force.",
+      "toaster_world", "choice",
+      choices=[
+          ("quiet", "Quiet"),
+          ("cozy", "Cozy"),
+          ("alive", "Alive"),
+          ("busy", "Busy"),
+          ("chaos", "Chaos"),
+      ])
+    f("toaster_universe_comedy_level", "Comedy level",
+      "How often ambient gags fire.",
+      "toaster_world", "choice",
+      choices=[("calm", "Calm"), ("balanced", "Balanced"), ("unhinged", "Unhinged")])
+    f("toaster_universe_chatter_level", "Character chatter",
+      "Ambient quips only. Critical status/error speech is unaffected.",
+      "toaster_world", "choice",
+      choices=[("off", "Off"), ("low", "Low"), ("normal", "Normal"), ("high", "High")])
+    f("toaster_universe_personal_lore_enabled", "Personal lore",
+      "Recurring personal narrative callbacks.",
+      "toaster_world", "bool")
+    f("toaster_universe_rare_events_enabled", "Rare events",
+      "Allow rare world events. Deterministic debug force stays out of Settings.",
+      "toaster_world", "bool")
+    f("toaster_universe_rare_event_frequency", "Rare event frequency",
+      "How often rare events may fire when enabled.",
+      "toaster_world", "choice",
+      choices=[("rare", "Rare"), ("occasional", "Occasional"), ("frequent", "Frequent")])
+    f("toaster_universe_work_activity", "Character activity while working",
+      "Adjusts focus suppression intensity. Hard drag/select/click sanctuaries stay on.",
+      "toaster_world", "choice",
+      choices=[("minimal", "Minimal"), ("adaptive", "Adaptive"), ("normal", "Normal")])
+    f("toaster_universe_world_sounds", "World sounds",
+      "Master switch for the world Audio Director.",
+      "toaster_world", "bool")
+    f("toaster_universe_character_voice", "Character voice",
+      "Spoken character lines through the existing mixer.",
+      "toaster_world", "bool")
+    f("toaster_universe_ambient_sounds", "Ambient sounds",
+      "Non-voice world cues.",
+      "toaster_world", "bool")
+    f("toaster_universe_voice_volume", "Sound / voice volume",
+      "Existing Audio Director volume.",
+      "toaster_world", "float", min_val=0.0, max_val=1.0, step=0.05)
+    f("toaster_universe_llm_director_enabled", "LLM Director enabled",
+      "When off, the world stays deterministic. Separate from Grammar Judge.",
+      "toaster_world", "bool")
+    f("grammar_judge_enabled", "Grammar Judge enabled",
+      "When off, ASR follows the explicit non-LLM path. Separate from LLM Director.",
+      "toaster_world", "bool")
 
     # --- Advanced ---
     f("echo_energy_threshold", "Echo Energy Threshold",

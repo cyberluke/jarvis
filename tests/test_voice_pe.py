@@ -1773,6 +1773,7 @@ class TestLeaseAndBridges:
 
 def _bare_listener():
     from jarvis.listening.listener import VoiceListener
+    from unittest.mock import MagicMock
 
     cfg = SimpleNamespace(
         sample_rate=16000,
@@ -1785,7 +1786,8 @@ def _bare_listener():
         voice_collect_seconds=2.0,
         voice_max_collect_seconds=60.0,
     )
-    return VoiceListener(SimpleNamespace(), cfg, None, SimpleNamespace())
+    return VoiceListener(SimpleNamespace(), cfg, None, SimpleNamespace(),
+                         MagicMock())
 
 
 class _Fanout:

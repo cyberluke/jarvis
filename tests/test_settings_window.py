@@ -591,7 +591,7 @@ class TestSpeechSettingsMetadata:
         fm = _field_for("whisper_language")
         assert fm is not None and fm.field_type == "choice"
         values = {v for v, _ in (fm.choices or [])}
-        assert values == {"auto", "en", "cs", "vi", "sk"}
+        assert values == {"cs+vi", "en", "cs", "vi", "sk"}
 
 
 @pytest.mark.unit
@@ -601,7 +601,7 @@ class TestSpeechSettingsDefaults:
     def test_defaults_are_as_documented(self):
         """get_default_config() carries the expected speech defaults."""
         defaults = get_default_config()
-        assert defaults["whisper_language"] == "auto"
+        assert defaults["whisper_language"] == "cs+vi"
         assert defaults["speech_spellcheck_enabled"] is True
         assert defaults["speech_spellcheck_languages"] == ["en", "cs", "vi", "sk"]
         assert defaults["speech_spellcheck_protected_terms"] == []
@@ -629,13 +629,13 @@ class TestSpeechSettingsResolution:
         [
             ("cs", "cs"),
             ("VI", "vi"),
-            ("de", "auto"),
-            ("", "auto"),
+            ("de", "cs+vi"),
+            ("", "cs+vi"),
         ],
     )
     def test_whisper_language_resolution(self, raw, expected):
         """A supported code is kept (case-folded); anything else, including an
-        empty value, falls back to auto-detection."""
+        empty value and the legacy \"auto\", folds into the cs+vi two-pass set."""
         with patch("jarvis.config._load_json", return_value={"whisper_language": raw}):
             from jarvis.config import load_settings
 

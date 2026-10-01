@@ -194,6 +194,15 @@ class GrammarJudge:
                     content = message.get("content")
                     if isinstance(content, str) and content.strip():
                         text = content
+                if text is None:
+                    choices = resp.get("choices")
+                    if isinstance(choices, list) and choices:
+                        first = choices[0] if isinstance(choices[0], dict) else {}
+                        msg = first.get("message") if isinstance(first, dict) else None
+                        if isinstance(msg, dict):
+                            content = msg.get("content")
+                            if isinstance(content, str) and content.strip():
+                                text = content
         except Exception as exc:
             latency = (time.perf_counter() - started) * 1000.0
             debug_log(
