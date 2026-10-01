@@ -563,6 +563,10 @@ def _build_field_metadata() -> List[FieldMeta]:
     f("tune_enabled", "Startup Tune",
       "Play startup sound",
       "features", "bool")
+    f("proactive_remarks_enabled", "Random Quotes",
+      "Let Toustovač speak unsolicited remarks: the startup quote and periodic "
+      "comments. Disabled by default.",
+      "features", "bool")
     f("dictation_enabled", "Dictation Mode",
       "Hold a hotkey to record speech, release to paste transcription into any app",
       "features", "bool")

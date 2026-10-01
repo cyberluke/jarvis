@@ -20,7 +20,10 @@ Exponential backoff: the first remark waits `base`, the next `base*2`, then `bas
 
 Critical events: `app.error`, `network.disconnected`, `battery.low`, `build.failed`, `system.temperature_high`. Direct-interaction types (allowed in polite alongside critical): `app.startup`, `user.login`, `user.unlock`, `microphone.available`. Completed-action types (preferred remark seams): `tool.completed`, `download.completed`, `build.success`, `build.failed`.
 
-Config keys: `proactive_mode` ("authentic" default), `proactive_min_gap_sec`/`proactive_hour_limit` (`null` = per-mode default, otherwise numeric).
+Config keys: `proactive_remarks_enabled` (master switch for all unsolicited
+remarks — startup quote and periodic comments — default `false`),
+`proactive_mode` ("authentic" default), `proactive_min_gap_sec`/`proactive_hour_limit`
+(`null` = per-mode default, otherwise numeric).
 
 ## Event shape
 

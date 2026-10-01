@@ -119,6 +119,10 @@ void RefreshView(void* view_ptr) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  /* The v1 engine path (JarvisAeCreate) does not init COM itself; without an
+     initialized apartment CoCreateInstance(MMDeviceEnumerator) fails and the
+     sidecar aborts with JARVIS_AE_ERR_NO_ENDPOINTS. */
+  (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (argc > 1) g_parent = static_cast<DWORD>(std::strtoul(argv[1], nullptr, 10));
   uint32_t aec_mode = JARVIS_AE_AEC_MODE_WEBRTC_AEC3;
   uint32_t profile = JARVIS_AE_PROFILE_STUDIO;

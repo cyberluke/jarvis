@@ -904,6 +904,9 @@ class Settings:
     proactive_mode: str = "authentic"
     proactive_min_gap_sec: Optional[float] = None
     proactive_hour_limit: Optional[int] = None
+    #: Master switch for unsolicited remarks (startup quote + periodic
+    #: comments); disabled by default.
+    proactive_remarks_enabled: bool = False
 
     # Everywhere (OS-wide AI text interaction plane; everywhere.spec.md).
     #: Master switch; when False the named-pipe broker is not started.
@@ -1394,6 +1397,10 @@ def get_default_config() -> Dict[str, Any]:
         # user speaks again.
         "proactive_min_gap_sec": None,  # None = per-mode base (1800 / 180 / 0 s)
         "proactive_hour_limit": None,   # None = per-mode default (2 / 6 / 99)
+        # Master switch for unsolicited remarks (the startup quote and the
+        # periodic comments). Off by default; when on, the mode/gap/limit keys
+        # above govern the behaviour.
+        "proactive_remarks_enabled": False,
 
 
         # Whisper Speech Recognition
@@ -2489,6 +2496,9 @@ def load_settings() -> Settings:
             proactive_hour_limit = max(1, int(_limit_raw))
         except (TypeError, ValueError):
             proactive_hour_limit = None
+    proactive_remarks_enabled = bool(
+        merged.get("proactive_remarks_enabled", False)
+    )
 
     # Parse fallbacks mirror `get_default_config()` exactly, so a config.json
     # missing a key resolves to the same value as a fresh install.
@@ -2843,6 +2853,7 @@ voice_pe_no_audio_warn_s=voice_pe_no_audio_warn_s,
         proactive_mode=proactive_mode,
         proactive_min_gap_sec=proactive_min_gap_sec,
         proactive_hour_limit=proactive_hour_limit,
+        proactive_remarks_enabled=proactive_remarks_enabled,
 
         # Latency switches
         direct_instruct_mode=direct_instruct_mode,

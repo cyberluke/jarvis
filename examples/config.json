@@ -86,6 +86,7 @@
   "proactive_mode": "authentic",
   "proactive_min_gap_sec": null,
   "proactive_hour_limit": null,
+  "proactive_remarks_enabled": false,
   "whisper_model": "large-v3-turbo",
   "whisper_backend": "auto",
   "whisper_device": "cuda",

@@ -1363,8 +1363,10 @@ def main(smoke_test: bool = False) -> None:
         print("🎙️ Dictation disabled", flush=True)
 
     # Proactive toaster service (proactive.spec.md): policy-gated unsolicited
-    # remarks in the configured interruption mode. Starts with the
-    # app.startup stimulus so the persona introduces itself once per boot.
+    # remarks in the configured interruption mode. The startup quote is
+    # opt-in: it only fires when ``proactive_remarks_enabled`` is on (the
+    # Settings toggle "Random Quotes"), so the persona stays quiet at boot by
+    # default.
     try:
         _svc_settings = resolve_service_settings(cfg)
         _global_proactive_service = ProactiveToasterService(
@@ -1374,11 +1376,13 @@ def main(smoke_test: bool = False) -> None:
             hour_limit=_svc_settings["hour_limit"],
             system_prompt=build_system_prompt(cfg.assistant_display_name, cfg.persona_lines),
         )
-        _startup_remark = _global_proactive_service.handle_event({
-            "type": "app.startup",
-            "timestamp": time.time(),
-            "context": {"model": cfg.llm_chat_model, "whisper_model": cfg.whisper_model},
-        })
+        _startup_remark = None
+        if bool(getattr(cfg, "proactive_remarks_enabled", False)):
+            _startup_remark = _global_proactive_service.handle_event({
+                "type": "app.startup",
+                "timestamp": time.time(),
+                "context": {"model": cfg.llm_chat_model, "whisper_model": cfg.whisper_model},
+            })
         if _startup_remark:
             from .proactive import update_face
             update_face("success", label="Startup")
@@ -1770,8 +1774,11 @@ def main(smoke_test: bool = False) -> None:
 
             # Proactive service sampling (proactive.spec.md). Cheap probes on
             # the 1 s tick; the per-remark gap inside the service keeps the
-            # firehose rate sane when several probes co-fire.
-            if _global_proactive_service is not None and now - last_proactive_check >= proactive_check_interval:
+            # firehose rate sane when several probes co-fire. Skipped entirely
+            # while the "Random Quotes" setting is off.
+            if (_global_proactive_service is not None
+                    and bool(getattr(cfg, "proactive_remarks_enabled", False))
+                    and now - last_proactive_check >= proactive_check_interval):
                 try:
                     for _remark in run_periodic_checks(
                         _global_proactive_service,
