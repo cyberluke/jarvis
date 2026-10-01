@@ -1907,6 +1907,15 @@ class JarvisSystemTray:
         # Note: Creating the face window also initializes the SpeakingState singleton
         # in the main thread, which is important for cross-thread signal delivery
         self.face_window = FaceWindow()
+        self.world_overlay = None
+        try:
+            from desktop_app.toaster_universe.world import get_world
+
+            world = get_world()
+            world.anchors_ready = False
+            debug_log("toaster universe WORLD_WAITING_FOR_ANCHORS", "desktop")
+        except Exception as exc:
+            debug_log(f"toaster universe world init skipped: {exc}", "desktop")
 
         # Create dictation history window (hidden by default)
         from desktop_app.dictation_history import DictationHistoryWindow
@@ -2422,6 +2431,8 @@ class JarvisSystemTray:
             self.log_viewer.activateWindow()
         self.face_window.show()
         self.face_window.raise_()
+        self.app.processEvents()
+        self._attach_toaster_universe()
         # Deterministic readiness state for the overlay before recording.
         try:
             from desktop_app.face_widget import get_jarvis_state
@@ -2528,11 +2539,31 @@ class JarvisSystemTray:
         except Exception as e:
             debug_log(f"failed to connect dictation history: {e}", "desktop")
 
+    def _attach_toaster_universe(self) -> None:
+        """FaceWindow mapped → live anchors → overlay. No spawn before anchors."""
+        try:
+            from desktop_app.toaster_universe.overlay import attach_overlay
+            from desktop_app.toaster_universe.world import get_world
+
+            world = get_world()
+            if not world.cfg.enabled:
+                return
+            self.face_window.face.sync_world_anchors(world)
+            if not world.anchors_ready:
+                debug_log("toaster universe still WORLD_WAITING_FOR_ANCHORS", "desktop")
+                return
+            if self.world_overlay is None:
+                self.world_overlay = attach_overlay(world)
+                debug_log("toaster universe overlay attached after live anchors", "desktop")
+        except Exception as exc:
+            debug_log(f"toaster universe overlay skipped: {exc}", "desktop")
+
     def show_face_window(self) -> None:
         """Show the face window and bring it to front."""
         self.face_window.show()
         self.face_window.raise_()
         self.face_window.activateWindow()
+        self._attach_toaster_universe()
 
     def open_directory(self, directory_path: Path, directory_name: str) -> None:
         """Open a directory in the system file manager."""

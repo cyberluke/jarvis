@@ -146,7 +146,7 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
     IDXGIAdapter1 (IDXGIAdapter): + [10] GetDesc1
     """
     from ctypes import (windll, wintypes, Structure, POINTER, c_void_p,
-                        c_size_t, byref, c_uint32, WINFUNCTYPE)
+                        c_size_t, byref, c_uint32, WINFUNCTYPE, c_long)
 
     class GUID(Structure):
         _fields_ = [
@@ -186,13 +186,15 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
             ("_driver_slop", wintypes.UINT * 32),
         ]
 
-    # COM method type aliases
+    # COM method type aliases. HRESULT was removed from ``ctypes.wintypes``
+    # in Python 3.13; it is a 32-bit signed LONG, so use c_long directly.
+    _HRESULT = c_long
     ReleaseFunc = WINFUNCTYPE(wintypes.ULONG, c_void_p)
     EnumAdapters1Func = WINFUNCTYPE(
-        wintypes.HRESULT, c_void_p, c_uint32, POINTER(c_void_p),
+        _HRESULT, c_void_p, c_uint32, POINTER(c_void_p),
     )
     GetDesc1Func = WINFUNCTYPE(
-        wintypes.HRESULT, c_void_p, POINTER(DXGI_ADAPTER_DESC1),
+        _HRESULT, c_void_p, POINTER(DXGI_ADAPTER_DESC1),
     )
 
     def _vtable(obj: int, n: int) -> Any:
@@ -209,7 +211,7 @@ def _dxgi_adapter_vram_mb() -> Optional[int]:
 
     dxgi = windll.dxgi
     create_factory = dxgi.CreateDXGIFactory1
-    create_factory.restype = wintypes.HRESULT
+    create_factory.restype = _HRESULT
     create_factory.argtypes = [POINTER(GUID), POINTER(c_void_p)]
 
     factory_ptr = c_void_p()

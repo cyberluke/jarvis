@@ -340,6 +340,12 @@ class VoicePEDevice:
         self.wake_words_disabled = bool(config.disable_wake_words)
         self.last_event_at = ""
         self.last_error = ""
+        #: Satellite-reported ``VoiceAssistantAudioSettings`` of the last run
+        #: (noise suppression / auto gain / volume multiplier), read-only.
+        self.device_audio_settings: dict = {}
+        #: Active audio profile name and its resolved settings view.
+        self.active_profile: str = "auto"
+        self.audio_settings_view = None
 
         self._client = None
         self._reconnect = None
@@ -434,6 +440,7 @@ class VoicePEDevice:
 
         self.loop = asyncio.get_running_loop()
         self._ingress = AudioIngress(self._listener, self.config, self.metrics)
+        self._attach_normalizer()
         self._client = make_client(
             self._host,
             self._port,
@@ -664,6 +671,12 @@ class VoicePEDevice:
 
         self._persist_identity()
         self.state = DeviceState.READY
+        # Revalidate the audio pipeline profile on every (re)connect: the
+        # ingress/normalizer survive, but the resolved view is re-applied so
+        # a profile set while the device was down takes effect immediately
+        # (see audio_pipeline.spec.md, runtime safety).
+        if self.audio_settings_view is not None and self._ingress is not None:
+            self.apply_audio_profile(self.audio_settings_view)
         self.led_phase = "idle"
         self._sync_face_state()
         self._mark_event("connected")
@@ -795,6 +808,11 @@ class VoicePEDevice:
         self._timeline_stamp("handle_pipeline_start_enter")
         self.session_generation += 1
         self._bump_metric("sessions")
+        # The satellite reports its on-device DSP state on every run; it is
+        # read-only here (the Native API has no setter for these fields).
+        from .audio_settings import normalize_device_settings
+
+        self.device_audio_settings = normalize_device_settings(audio_settings)
         # A new run replaces the playback of the previous one.
         self._playback_latch = 0
 
@@ -1181,6 +1199,51 @@ class VoicePEDevice:
             or self.identity.get("node_name")
             or self._host
         )
+
+    @property
+    def audio_ingress(self) -> Optional["AudioIngress"]:
+        """The device's microphone ``AudioIngress``, when a connection exists.
+
+        External sinks attach here to tap the delivered satellite signal
+        (see ``AudioIngress.attach_sink``). Never call back into the ingress
+        from inside a sink callback.
+        """
+        return self._ingress
+
+    # -- audio pipeline profile (see audio_pipeline.spec.md) -----------------
+
+    def _attach_normalizer(self) -> None:
+        """Create the speech-aware normalizer from the device config."""
+        if self._ingress is None:
+            return
+        from .normalizer import SpeechAwareNormalizer
+
+        self._ingress.normalizer = SpeechAwareNormalizer(
+            target_db=float(getattr(self.config, "normalizer_target_db", -28.0)),
+            max_gain_db=float(getattr(self.config, "normalizer_max_gain_db", 9.0)),
+            attack_db_per_s=float(
+                getattr(self.config, "normalizer_attack_db_per_s", 3.0)
+            ),
+            limiter_db=float(getattr(self.config, "normalizer_limiter_db", -1.0)),
+            enabled=bool(getattr(self.config, "normalizer_enabled", False)),
+        )
+
+    def apply_audio_profile(self, audio_settings) -> None:
+        """Apply a resolved ``VoicePEAudioSettings`` to the live pipeline.
+
+        The normalizer (per device) always follows it; the listener/whisper
+        knobs of the same view are applied by the manager, which owns the
+        shared settings object. ``audio_settings`` may be ``None`` (no
+        profile applied yet).
+        """
+        if audio_settings is None:
+            return
+        self.active_profile = str(getattr(audio_settings, "profile", "auto"))
+        self.audio_settings_view = audio_settings
+        if self._ingress is not None and self._ingress.normalizer is not None:
+            self._ingress.normalizer.apply_view(
+                **getattr(audio_settings, "values", {})
+            )
 
     async def wait_until_ready(self, timeout_s: float = 10.0) -> bool:
         """Poll until the connection reached ``READY``/``VOICE_ACTIVE``."""
@@ -2220,6 +2283,14 @@ class VoicePEDevice:
             "lease": self.lease.snapshot(),
             "source_status": source_status,
             "error": self.last_error,
+            # Full audio pipeline diagnostics (see audio_pipeline.spec.md):
+            # input levels, noise floor/SNR, AEC lane, normalizer gain and
+            # the satellite-reported on-device DSP settings.
+            "audio_settings": dict(self.device_audio_settings),
+            "profile": self.active_profile,
+            "diagnostics": (
+                self._ingress.diagnostics() if self._ingress is not None else {}
+            ),
         }
 
     def ui_view(self) -> dict:
@@ -2259,4 +2330,12 @@ class VoicePEDevice:
             "buttons": dict(self.config.button_actions),
             "entities": describe_entities(self.entities),
             "metrics": dict(self.metrics),
+            # Full audio pipeline diagnostics (see audio_pipeline.spec.md):
+            # input levels, noise floor/SNR, AEC lane, normalizer gain and
+            # the satellite-reported on-device DSP settings.
+            "audio_settings": dict(self.device_audio_settings),
+            "profile": self.active_profile,
+            "diagnostics": (
+                self._ingress.diagnostics() if self._ingress is not None else {}
+            ),
         }

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import secrets
 import threading
 import time
@@ -54,6 +55,16 @@ _ACCEPT_TICK_MS = 50
 # peer cannot wedge an instance forever; the accept is released by
 # DisconnectNamedPipe at stop() time.
 _PIPE_TIMEOUT_MS = 2000
+
+#: Per-frame pipe tracing (JARVIS_PIPE_TRACE=1). Ground truth for wedged
+#: sessions: every ReadFile/WriteFile result with byte counts and error
+#: codes, tagged by pipe instance index.
+_PIPE_TRACE = os.environ.get("JARVIS_PIPE_TRACE") == "1"
+
+
+def _trace(msg: str) -> None:
+    if _PIPE_TRACE:
+        print(f"[pipe-trace] {msg}", flush=True)
 
 # Win32 constants for the message-mode pipe (same values the terminal
 # bridge verified on this host family).
@@ -214,6 +225,7 @@ class EverywhereBroker:
             )
             if h:
                 self._handles.append(h)
+                _trace(f"create instance ok handle=0x{h & 0xffffffff:x}")
         if sd_ptr:
             self._k32.LocalFree(sd_ptr)
         if not self._handles:
@@ -302,6 +314,11 @@ class EverywhereBroker:
         k32.DisconnectNamedPipe.argtypes = [ct.c_void_p]
         k32.CancelIoEx.restype = ct.c_bool
         k32.CancelIoEx.argtypes = [ct.c_void_p, ct.c_void_p]
+        k32.PeekNamedPipe.restype = ct.c_bool
+        k32.PeekNamedPipe.argtypes = [
+            ct.c_void_p, ct.c_void_p, ct.c_uint,
+            ct.POINTER(ct.c_ulong), ct.POINTER(ct.c_ulong),
+            ct.POINTER(ct.c_ulong)]
         k32.CloseHandle.restype = ct.c_bool
         k32.CloseHandle.argtypes = [ct.c_void_p]
         k32.GetLastError.restype = ct.c_ulong
@@ -316,10 +333,13 @@ class EverywhereBroker:
         k32 = self._k32
         h = ctypes.c_void_p(handle)
         while not self._stop.is_set():
+            _trace(f"instance[{index}] ConnectNamedPipe waiting "
+                   f"(handle=0x{handle & 0xffffffff:x})")
             ok = k32.ConnectNamedPipe(h, None)
             err = k32.GetLastError()
+            _trace(f"instance[{index}] ConnectNamedPipe ok={ok} err={err}")
             if ok or err == ERROR_PIPE_CONNECTED:
-                frame = self._read_message(h)
+                frame = self._read_message(h, tag=f"i{index}")
                 debug_log(f"everywhere frame in: "
                           f"{'ok' if frame is not None else 'none'}",
                           "everywhere")
@@ -364,7 +384,8 @@ class EverywhereBroker:
                   "everywhere")
         try:
             while not self._stop.is_set():
-                frame = self._read_message(h)
+                _trace(f"session[{int(h.value) & 0xffff:x}] waiting for frame")
+                frame = self._read_message(h, tag=f"s{int(h.value) & 0xffff:x}")
                 if frame is None:
                     break
                 debug_log("everywhere frame in: ok (subscribed)",
@@ -387,14 +408,34 @@ class EverywhereBroker:
             debug_log(f"everywhere unsubscribed clients={len(self._subscribers)}",
                       "everywhere")
 
-    def _read_message(self, handle) -> Optional[dict]:
+    def _read_message(self, handle, tag: str = "") -> Optional[dict]:
+        """Read one frame with PeekNamedPipe gating.
+
+        The session thread runs this while OTHER threads (task manager) may
+        WriteFile pushes on the same handle. On a message-mode pipe a
+        long-pending ReadFile blocks concurrent writes on the handle (the
+        observed wedge: pings/pushes never arrived while every write waited),
+        so reads must never linger: peek for data, then read only when a
+        frame is known to be waiting.
+        """
         k32 = self._k32
         buf = ctypes.create_string_buffer(_READ_BUF)
         n = ctypes.c_ulong(0)
         data = bytearray()
         while True:
+            avail = ctypes.c_ulong(0)
+            pk = k32.PeekNamedPipe(handle, None, 0, None,
+                                   ctypes.byref(avail), None)
+            if not pk:
+                _trace(f"peek[{tag}] failed err={k32.GetLastError()}")
+                return None
+            if avail.value == 0:
+                time.sleep(0.005)
+                continue
             ok = k32.ReadFile(handle, buf, _READ_BUF, ctypes.byref(n), None)
             err = 0 if ok else k32.GetLastError()
+            _trace(f"read[{tag}] ok={ok} err={err} n={int(n.value)} "
+                   f"total={len(data)}")
             if ok:
                 data += buf.raw[: int(n.value)]
                 if err != ERROR_MORE_DATA:
@@ -846,6 +887,21 @@ class EverywhereBroker:
             self._coach_events.append(event)
             if len(self._coach_events) > 100:
                 del self._coach_events[:-100]
+        kind = event.get("type")
+        if kind in ("coach_session_started", "coach_session_ended"):
+            # The meeting scribe switches the Voice PE pipeline to the
+            # MEETING profile for the session and back afterwards
+            # (see integrations/voice_pe/audio_pipeline.spec.md).
+            try:
+                from ..daemon import get_voice_pe_manager
+
+                manager = get_voice_pe_manager()
+                if manager is not None:
+                    manager.set_meeting_mode(kind == "coach_session_started")
+            except Exception as exc:
+                debug_log(
+                    f"broker: meeting-mode switch failed: {exc}", "everywhere"
+                )
 
     def _drain_coach_events(self) -> list:
         with self._sub_lock:

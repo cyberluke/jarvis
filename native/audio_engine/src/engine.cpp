@@ -1773,6 +1773,17 @@ void* JarvisAeShmPtr(void) { return V1Ok() ? static_cast<void*>(&g_shm) : nullpt
 uint32_t JarvisAeShmFrames(void) { return JARVIS_AE_CLEANED_RING_FRAMES; }
 uint32_t JarvisAeGetStatus(void) { return g.status; }
 uint32_t JarvisAeCapabilities(void) {
+  /* V2 engine: the per-engine state owns the loopback/mic lanes and the V1
+     globals are never populated (capabilities() would report 0 for loopback
+     even though the render reference is live, breaking the subtitles start
+     gate). */
+  if (g2) {
+    EngineV2* e = g2;
+    return (e->mic.raw ? JARVIS_AE_CAP_RAW_CAPTURE : 0u) |
+           (e->loop.capture ? JARVIS_AE_CAP_LOOPBACK : 0u) |
+           (e->loop.ref_tap == JARVIS_AE_REF_TAP_POST_VOLUME
+                ? JARVIS_AE_CAP_POST_VOLUME_REF : 0u);
+  }
   return (g.mic.raw ? JARVIS_AE_CAP_RAW_CAPTURE : 0u) |
          (g.loop.ev ? JARVIS_AE_CAP_LOOPBACK : 0u) |
          (g.ecr ? (JARVIS_AE_CAP_NATIVE_AEC | JARVIS_AE_CAP_ENDPOINT_REF_CTRL) : 0u);

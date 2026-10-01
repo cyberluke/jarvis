@@ -255,6 +255,118 @@ class AudioIngress:
         self._shadow: dict = {}
         #: False on firmware without ``multi_channel_audio`` (single channel).
         self._multi: bool = True
+        #: Optional external taps on the *delivered* microphone signal. A sink
+        #: implements ``on_frame(frame)``, ``on_stream_start(stream)`` and
+        #: ``on_stream_end(stream)``; it must only enqueue and count, never do
+        #: DSP inline. Empty tuple keeps the hot path a single falsy check.
+        self._sinks: tuple = ()
+        #: Optional speech-aware post normalizer (see normalizer.py). Applied
+        #: in the pump on the float32 frames, after the single conversion and
+        #: before the listener queue; ``None`` keeps the path untouched.
+        self.normalizer = None
+
+    # -- external taps on the delivered signal ------------------------------
+
+    def attach_sink(self, sink) -> None:
+        """Register one sink; the same instance is never registered twice."""
+        if sink is None or any(s is sink for s in self._sinks):
+            return
+        self._sinks = self._sinks + (sink,)
+
+    def detach_sink(self, sink) -> None:
+        """Remove one sink; unknown sinks are ignored."""
+        self._sinks = tuple(s for s in self._sinks if s is not sink)
+
+    def _tap(self, frame) -> None:
+        """Fan the delivered frame out to every registered sink (append only)."""
+        if self._sinks:
+            for sink in self._sinks:
+                try:
+                    sink.on_frame(frame)
+                except Exception:
+                    pass
+
+    def _tap_stream_start(self, stream) -> None:
+        if self._sinks:
+            for sink in self._sinks:
+                try:
+                    sink.on_stream_start(stream)
+                except Exception:
+                    pass
+
+    def _tap_stream_end(self, stream) -> None:
+        if self._sinks:
+            for sink in self._sinks:
+                try:
+                    sink.on_stream_end(stream)
+                except Exception:
+                    pass
+
+    def _normalize(self, delivered):
+        """Apply the speech-aware normalizer to one float32 frame in place.
+
+        The local microphone never passes through here (the normalizer is a
+        satellite-path stage), and a disabled or absent normalizer leaves
+        the frame untouched.
+        """
+        normalizer = self.normalizer
+        if normalizer is None or not getattr(normalizer, "enabled", False):
+            return delivered
+        if isinstance(delivered, LocalMicFrame):
+            return delivered
+        samples = getattr(delivered, "samples", None)
+        if samples is None or isinstance(samples, (bytes, bytearray)):
+            return delivered
+        try:
+            processed = normalizer.process(samples)
+            return SatelliteAudioFrame(
+                delivered.stream, delivered.source, processed, int(delivered.channel)
+            )
+        except Exception:  # pragma: no cover - defensive; never break the path
+            return delivered
+
+    def diagnostics(self) -> dict:
+        """Live signal + pipeline metrics for the diagnostics panel.
+
+        Folds the ingress counters, the last packet's input level, the AEC
+        lane state and the normalizer metrics into one payload. Honest when
+        the pipeline is idle: unknown fields stay ``None``.
+        """
+        normalizer = self.normalizer
+        normalizer_metrics = normalizer.metrics() if normalizer is not None else None
+        rows = self.packet_stats(stream=None)
+        last = rows[-1] if rows else None
+        input_rms_db = None
+        input_peak_db = None
+        if last is not None:
+            input_rms_db = (
+                round(20.0 * np.log10(last.rms), 2)
+                if np is not None and last.rms > 0 else None
+            )
+            input_peak_db = (
+                round(20.0 * np.log10(last.peak), 2)
+                if np is not None and last.peak > 0 else None
+            )
+        floor = None
+        snr = None
+        if normalizer_metrics is not None:
+            floor = normalizer_metrics.get("noise_floor_db")
+            if input_rms_db is not None and floor is not None:
+                snr = round(input_rms_db - float(floor), 2)
+        status = self.source_status(self._stream)
+        return {
+            "input_rms_db": input_rms_db,
+            "input_peak_db": input_peak_db,
+            "noise_floor_db": floor,
+            "snr_db": snr,
+            "queue_depth_ms": self.depth_ms(),
+            "dropped_chunks": int(self._metrics.get("audio_dropped_chunks", 0)),
+            "chunks": int(self._metrics.get("audio_chunks", 0)),
+            "selected_channel": self.selected_audio_channel(self._stream),
+            "selection_reason": self.selection_reason(self._stream),
+            "aec": status,
+            "normalizer": normalizer_metrics,
+        }
 
     # -- host AEC lane (native ABI v2) ----------------------------------
 
@@ -528,11 +640,11 @@ class AudioIngress:
             if cleaned:
                 for block in cleaned:
                     self._pending_samples += int(block.size)
-                    self._items.append(
-                        SatelliteAudioFrame(
-                            frame.stream, frame.source, block, int(ch)
-                        )
+                    item = SatelliteAudioFrame(
+                        frame.stream, frame.source, block, int(ch)
                     )
+                    self._items.append(item)
+                    self._tap(item)
                 self._metrics["audio_chunks"] = int(
                     self._metrics.get("audio_chunks", 0)
                 ) + len(cleaned)
@@ -543,6 +655,7 @@ class AudioIngress:
                 return
         self._pending_samples += len(frame.samples) // 2
         self._items.append(frame)
+        self._tap(frame)
         self._publish_raw(frame, ch)
         self._trim_to_budget()
         self._metrics["audio_chunks"] = int(self._metrics.get("audio_chunks", 0)) + 1
@@ -682,11 +795,11 @@ class AudioIngress:
                                          if getattr(drop, "samples", None) is not None else 0)),
                             )
                         self._pending_samples += int(block.size)
-                        self._items.append(
-                            SatelliteAudioFrame(
-                                frame.stream, frame.source, block, int(ch)
-                            )
+                        item = SatelliteAudioFrame(
+                            frame.stream, frame.source, block, int(ch)
                         )
+                        self._items.append(item)
+                        self._tap(item)
                         replayed += 1
                     continue
             total = self._window_samples.get(key + (int(ch),), 0)
@@ -699,6 +812,7 @@ class AudioIngress:
                     self._items.popleft()
             self._pending_samples += len(frame.samples) // 2
             self._items.append(frame)
+            self._tap(frame)
             replayed += 1
             if not use_lane:
                 self._publish_raw(frame, int(ch))
@@ -784,6 +898,7 @@ class AudioIngress:
         if old != new_key and old in self._lane_handles:
             self._destroy_lane(old)
         self._stream = new
+        self._tap_stream_start(new)
         return self._stream
 
     @property
@@ -851,6 +966,7 @@ class AudioIngress:
                 )
         # Weightless: the marker takes no budget slot and is never refused.
         self._items.append(EndOfStream(stream, source))
+        self._tap_stream_end(stream)
         self._wake_pump()
 
     def push_tts_reference(
@@ -917,6 +1033,7 @@ class AudioIngress:
                 else:
                     # Cleaned float32 frame straight off the native AEC lane.
                     delivered = item
+            delivered = self._normalize(delivered)
             try:
                 self._listener._audio_q.put_nowait(delivered)
             except Exception:
@@ -987,6 +1104,7 @@ class AudioIngress:
                 )
             else:
                 payload = item
+            payload = self._normalize(payload)
             try:
                 self._listener._audio_q.put_nowait(payload)
             except Exception:
@@ -1022,6 +1140,11 @@ class AudioIngress:
             _aio.lane_reset(key)
         self._arrival.clear()
         self._shadow.clear()
+        if self.normalizer is not None:
+            try:
+                self.normalizer.reset()
+            except Exception:  # pragma: no cover - defensive
+                pass
         self._wake_pump()
 
     def close(self) -> None:

@@ -22,9 +22,11 @@ the overlay's "answer language" dropdown; the transcript stays verbatim.
 
 from __future__ import annotations
 
+import platform
 import threading
 import time
-from typing import Any, Callable, Optional
+import uuid
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..debug import debug_log
 
@@ -91,13 +93,32 @@ class InterviewCoach:
         # Rolling interview context: (speaker, text) pairs.
         self._context: list[tuple[str, str]] = []
         self._max_context = 24
+        # Canonical meeting capture (v271_ingest.spec.md): one session =
+        # one meeting record with lane-diarized transcript segments.
+        self._meeting_id: Optional[str] = None
+        self._title = ""
+        self._participants: List[Dict[str, Any]] = []
+        self._calendar_event_id: Optional[str] = None
+        self._mail_thread_id: Optional[str] = None
+        self._session_started_at = ""
+        self._session_ended_at = ""
+        self._t0 = 0.0  # monotonic clock at session start (segment ms base)
+        self._segments: List[Dict[str, Any]] = []
+        self._revision = 0  # bumped on every summarize()
 
     # ── lifecycle ─────────────────────────────────────────────────────
     @property
     def running(self) -> bool:
         return self._running
 
-    def start(self) -> bool:
+    def start(
+        self,
+        *,
+        title: Optional[str] = None,
+        participants: Optional[List[Dict[str, Any]]] = None,
+        calendar_event_id: Optional[str] = None,
+        mail_thread_id: Optional[str] = None,
+    ) -> bool:
         with self._lock:
             if self._running:
                 return True
@@ -121,6 +142,22 @@ class InterviewCoach:
                 return False
             self._running = True
             self._context = []
+            # New session identity: the meeting id is the root
+            # idempotency key for V271 ingestion.
+            self._meeting_id = f"mtg-{uuid.uuid4().hex[:16]}"
+            self._title = str(title or "").strip() or (
+                f"Meeting {time.strftime('%Y-%m-%d %H:%M')}"
+            )
+            self._participants = [
+                p for p in (participants or []) if isinstance(p, dict)
+            ]
+            self._calendar_event_id = calendar_event_id or None
+            self._mail_thread_id = mail_thread_id or None
+            self._segments = []
+            self._revision = 0
+            self._t0 = time.monotonic()
+            self._session_started_at = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             self._thread = threading.Thread(
                 target=self._loop, name="coach-capture", daemon=True)
             self._thread.start()
@@ -167,8 +204,10 @@ class InterviewCoach:
 
         mic_voiced: list = []
         mic_silence = 0
+        mic_start = 0.0
         lb_voiced: list = []
         lb_silence = 0
+        lb_start = 0.0
         loopback = _HeadsetLoopback(self._cfg)
         try:
             loopback.start()
@@ -198,13 +237,17 @@ class InterviewCoach:
                         frame = mic[off:off + 160]
                         rms = float(np.sqrt(np.mean(frame * frame)) + 1e-9)
                         if rms >= _SILENCE_RMS:
+                            if not mic_voiced:
+                                mic_start = time.monotonic()
                             mic_voiced.append(frame); mic_silence = 0
                         else:
                             mic_silence += 1
                             if mic_voiced: mic_voiced.append(frame)
                         if mic_voiced and (mic_silence >= _END_SILENCE
                                            or len(mic_voiced) >= _MAX_UTTERANCE):
-                            self._on_utterance("me", np.concatenate(mic_voiced), 16000)
+                            self._on_utterance(
+                                "me", np.concatenate(mic_voiced), 16000,
+                                mic_start, time.monotonic())
                             mic_voiced = []; mic_silence = 0
             # Loopback (others): WASAPI loopback of the same headset earphone.
             if input_lane in ("loopback", "both"):
@@ -217,13 +260,17 @@ class InterviewCoach:
                         frame = lb[off:off + 480]
                         rms = float(np.sqrt(np.mean(frame * frame)) + 1e-9)
                         if rms >= _SILENCE_RMS:
+                            if not lb_voiced:
+                                lb_start = time.monotonic()
                             lb_voiced.append(frame); lb_silence = 0
                         else:
                             lb_silence += 1
                             if lb_voiced: lb_voiced.append(frame)
                         if lb_voiced and (lb_silence >= _END_SILENCE
                                           or len(lb_voiced) >= _MAX_UTTERANCE):
-                            self._on_utterance("others", np.concatenate(lb_voiced), 48000)
+                            self._on_utterance(
+                                "others", np.concatenate(lb_voiced), 48000,
+                                lb_start, time.monotonic())
                             lb_voiced = []; lb_silence = 0
             if (mic is None or len(mic) == 0) and (lb is None or len(lb) == 0):
                 time.sleep(0.01)
@@ -234,10 +281,11 @@ class InterviewCoach:
                 pass
 
     # ── per-utterance pipeline ────────────────────────────────────────
-    def _on_utterance(self, speaker: str, pcm, rate: int) -> None:
+    def _on_utterance(self, speaker: str, pcm, rate: int,
+                      t_start: float, t_end: float) -> None:
         import numpy as np
         pcm16 = pcm[::3].astype(np.float32) if rate == 48000 else pcm
-        text = self._transcribe(pcm16)
+        text, confidence = self._transcribe(pcm16)
         text = (text or "").strip()
         if not text:
             return
@@ -245,6 +293,17 @@ class InterviewCoach:
             self._context.append((speaker, text))
             if len(self._context) > self._max_context:
                 self._context = self._context[-self._max_context:]
+            # Canonical transcript segment: lane-based speaker id,
+            # wall-relative ms timestamps, Whisper avg_logprob confidence.
+            if self._meeting_id is not None:
+                self._segments.append({
+                    "segmentId": f"seg-{len(self._segments):04d}",
+                    "startMs": int(max(0.0, (t_start - self._t0) * 1000)),
+                    "endMs": int(max(0.0, (t_end - self._t0) * 1000)),
+                    "speakerId": speaker,
+                    "text": text,
+                    "confidence": confidence,
+                })
         debug_log(f"coach: [{speaker}] {text[:60]}", "everywhere")
         self._emit({"type": "transcript", "speaker": speaker, "text": text})
         # Only the "others" lane produces a hint. Interview mode: hints fire on
@@ -263,18 +322,25 @@ class InterviewCoach:
                     self._emit({"type": "hint", "question": text,
                                 "answer": hint})
 
-    def _transcribe(self, pcm16) -> str:
+    def _transcribe(self, pcm16) -> Tuple[str, Optional[float]]:
         model = getattr(self._listener, "model", None) \
             if self._listener is not None else None
         if model is None:
-            return ""
+            return "", None
         try:
             segments, _info = model.transcribe(
                 pcm16, beam_size=1, vad_filter=False)
-            return "".join(getattr(s, "text", "") for s in segments)
+            parts = list(segments)
+            text = "".join(getattr(s, "text", "") for s in parts)
+            logprobs = [getattr(s, "avg_logprob", None) for s in parts]
+            logprobs = [v for v in logprobs if isinstance(v, (int, float))]
+            confidence = (
+                round(sum(logprobs) / len(logprobs), 4) if logprobs else None
+            )
+            return text, confidence
         except Exception as exc:
             debug_log(f"coach: transcribe failed: {exc}", "everywhere")
-            return ""
+            return "", None
 
     def _analyze_thinking(self, statement: str) -> str:
         """Chit-chat mode: analyse the other person's reasoning/thinking and
@@ -332,21 +398,54 @@ class InterviewCoach:
 
     # ── post-meeting summary ──────────────────────────────────────────
     def summarize(self) -> str:
-        """Summarize the session, push it into the dialogue memory for the
-        diary, and return the summary text."""
+        """Finalize the session: extract structure with the local LLM,
+        push the transcript into the dialogue memory (diary), and hand
+        the canonical meeting record to the V271 graph ingestion
+        coordinator. Returns the summary text ('' when empty)."""
         with self._lock:
             history_lines = list(self._context)
-            history = "\n".join(f"{who}: {txt}" for who, txt in history_lines)
-        if not history.strip():
+            segments = list(self._segments)
+            meeting_id = self._meeting_id
+            title = self._title
+            started_at = self._session_started_at
+            ended_at = self._session_ended_at or time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            participants = list(self._participants)
+            calendar_event_id = self._calendar_event_id
+            mail_thread_id = self._mail_thread_id
+            revision = self._revision + 1
+            self._revision = revision
+        if not history_lines:
             return ""
-        system = ("You summarize a technical interview/meeting for a personal "
-                  "knowledge diary. List topics covered, Q&A highlights, and "
-                  "follow-ups to review. Be concise.")
+        history = "\n".join(f"{who}: {txt}" for who, txt in history_lines)
+
+        # Structured extraction: summary + decisions + action items +
+        # topics in one LLM call (falls back to raw transcript).
         try:
-            summary = (self._llm_chat(system, history) or "").strip()
+            from ..v271_ingest.record import (
+                build_meeting_record,
+                default_quality,
+                default_speakers,
+                extract_meeting_structure,
+                segments_to_transcript,
+            )
         except Exception as exc:
-            debug_log(f"coach: summary LLM failed: {exc}", "everywhere")
+            debug_log(f"coach: v271 record helpers unavailable: {exc}",
+                      "v271_ingest")
             return ""
+
+        try:
+            structure = extract_meeting_structure(
+                self._llm_chat,
+                segments_to_transcript(segments),
+                language=self.answer_language,
+            )
+        except Exception as exc:
+            debug_log(f"coach: meeting structure extraction failed: {exc}",
+                      "v271_ingest")
+            return ""
+        summary = structure["summary"]
+
         # Persist into the shared dialogue memory so the diary update carries
         # the meeting (topics, Q&A, follow-ups) alongside normal conversation.
         try:
@@ -354,7 +453,77 @@ class InterviewCoach:
             record_coach_session(history_lines, summary)
         except Exception as exc:
             debug_log(f"coach: diary push failed: {exc}", "everywhere")
+
+        # Durable handoff to V271 graph ingestion (v271_ingest.spec.md).
+        try:
+            from ..daemon import get_v271_ingest
+
+            ingest = get_v271_ingest()
+            if ingest is not None and meeting_id is not None:
+                source_device = str(
+                    getattr(self._cfg, "v271_source_device", "") or ""
+                ).strip() or platform.node()
+                record = build_meeting_record(
+                    meeting_id=meeting_id,
+                    title=title,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    source_device=source_device,
+                    segments=segments,
+                    summary=summary,
+                    decisions=structure["decisions"],
+                    action_items=structure["actionItems"],
+                    topics=structure["topics"],
+                    participants=participants,
+                    speakers=default_speakers(),
+                    quality=default_quality(segments),
+                    revision=revision,
+                    source_calendar_event_id=calendar_event_id,
+                    source_mail_thread_id=mail_thread_id,
+                )
+                ingest.enqueue(record)
+                self._emit({
+                    "type": "meeting_saved",
+                    "meetingId": meeting_id,
+                    "title": title,
+                    "state": "QUEUED",
+                    "label": "Saved locally",
+                })
+        except Exception as exc:
+            debug_log(f"coach: v271 ingest enqueue failed: {exc}", "v271_ingest")
         return summary
+
+    def retry_ingest(self, meeting_id: str) -> bool:
+        """Re-queue a failed V271 ingestion for ``meeting_id``."""
+        try:
+            from ..daemon import get_v271_ingest
+
+            ingest = get_v271_ingest()
+            if ingest is None:
+                return False
+            return bool(ingest.retry(meeting_id))
+        except Exception as exc:
+            debug_log(f"coach: v271 ingest retry failed: {exc}", "v271_ingest")
+            return False
+
+    def ingest_status(self, meeting_id: Optional[str] = None) -> list:
+        """Ingestion states for the meeting detail UX.
+
+        ``meeting_id=None`` returns all tracked meetings.
+        """
+        try:
+            from ..daemon import get_v271_ingest
+
+            ingest = get_v271_ingest()
+            if ingest is None:
+                return []
+            if meeting_id is not None:
+                status = ingest.status(meeting_id)
+                return [status] if status is not None else []
+            return ingest.list_status()
+        except Exception as exc:
+            debug_log(f"coach: v271 ingest status failed: {exc}", "v271_ingest")
+            return []
 
 
 class _HeadsetLoopback:

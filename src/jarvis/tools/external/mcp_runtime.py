@@ -118,6 +118,45 @@ def shutdown_runtime() -> None:
             debug_log(f"persistent MCP runtime shutdown error: {e}", "mcp")
 
 
+def stop_server(server_name: str) -> None:
+    """Stop the persistent worker for one server (if any).
+
+    The worker's stdio session is closed, which terminates the server
+    subprocess (and any children it owns). The next call referencing
+    the server spawns a fresh worker. Used by the desktop control
+    plane's MCP lifecycle API.
+    """
+    with _runtime_lock:
+        runtime = _runtime
+    if runtime is None or runtime.closed:
+        return
+    try:
+        runtime.stop_server(server_name)
+    except Exception as e:  # noqa: BLE001
+        debug_log(f"persistent MCP runtime stop_server error: {e}", "mcp")
+
+
+def is_server_running(server_name: str) -> bool:
+    """True when a live worker for ``server_name`` is cached."""
+    with _runtime_lock:
+        runtime = _runtime
+    if runtime is None or runtime.closed:
+        return False
+    with runtime._workers_lock:
+        worker = runtime._workers.get(server_name)
+    return worker is not None and worker.alive
+
+
+def active_servers() -> Dict[str, bool]:
+    """Snapshot of cached workers: server name → alive flag."""
+    with _runtime_lock:
+        runtime = _runtime
+    if runtime is None or runtime.closed:
+        return {}
+    with runtime._workers_lock:
+        return {name: worker.alive for name, worker in runtime._workers.items()}
+
+
 class _PersistentMCPRuntime:
     """Owns the background event loop and the per-server worker tasks."""
 

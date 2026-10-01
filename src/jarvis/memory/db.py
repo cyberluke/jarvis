@@ -60,6 +60,29 @@ CREATE TRIGGER IF NOT EXISTS summaries_au AFTER UPDATE ON conversation_summaries
   INSERT INTO summaries_fts(summaries_fts, rowid, summary, topics) VALUES('delete', old.id, old.summary, old.topics);
   INSERT INTO summaries_fts(rowid, summary, topics) VALUES (new.id, new.summary, new.topics);
 END;
+
+-- Durable V271 meeting graph ingestion records (v271_ingest.spec.md).
+-- One row per coach meeting; the full canonical record is kept as JSON so
+-- a failed ingestion is retryable without re-recording/re-transcribing.
+CREATE TABLE IF NOT EXISTS meeting_ingestions (
+  meeting_id          TEXT PRIMARY KEY,
+  interaction_kind    TEXT NOT NULL DEFAULT 'meeting',
+  title               TEXT NOT NULL DEFAULT '',
+  started_at          TEXT NOT NULL DEFAULT '',
+  ended_at            TEXT NOT NULL DEFAULT '',
+  source_device       TEXT NOT NULL DEFAULT '',
+  canonical_json      TEXT NOT NULL,
+  revision            INTEGER NOT NULL DEFAULT 1,
+  state               TEXT NOT NULL DEFAULT 'QUEUED',
+  stage               TEXT NOT NULL DEFAULT 'UPLOADING',
+  attempts            INTEGER NOT NULL DEFAULT 0,
+  last_error          TEXT,
+  v271_graph_meeting_id TEXT,
+  source_calendar_event_id TEXT,
+  source_mail_thread_id    TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
 """
 
 _VSS_SCHEMA_SQL = """

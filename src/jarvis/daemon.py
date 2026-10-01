@@ -107,6 +107,28 @@ def set_terminal_bridge(instance) -> None:
 # over the current-user named pipe. Voice and toolbar share this broker.
 _global_everywhere_broker = None
 
+# Desktop control plane (control_plane/control_plane.spec.md). One
+# loopback HTTP/SSE plane the paired v271 browser talks to; the voice
+# listener routes utterances to the paired browser through it. None when
+# disabled.
+_global_control_plane = None
+
+
+def get_control_plane():
+    """Return the desktop control plane (or None when disabled)."""
+    return _global_control_plane
+
+
+# V271 meeting graph ingestion (v271_ingest/v271_ingest.spec.md). Owns the
+# durable meeting ingestion job store + worker; the coach hands canonical
+# meeting records to it. None when disabled.
+_global_v271_ingest = None
+
+
+def get_v271_ingest():
+    """Return the V271 ingestion coordinator (or None when disabled)."""
+    return _global_v271_ingest
+
 
 def request_overlay(overlay: str) -> None:
     """Tray-menu entry: ask the Everywhere host to open an overlay window.
@@ -252,6 +274,9 @@ def _spawn_everywhere_host() -> None:
 # asyncio loop thread and one device entry per paired satellite. None when the
 # feature is off.
 _global_voice_pe_manager = None
+# Voice PE WebAudio bridge (voice_pe_bridge.spec.md): streams the satellite
+# microphone to the V271 PWA composer over a loopback WebSocket.
+_global_voice_pe_bridge = None
 # Config + DB booted by main(). Shared by the voice listener and the text-chat
 # submission path so voice and text are one conversation against one store.
 _global_cfg = None
@@ -834,6 +859,11 @@ def get_voice_pe_manager():
     return _global_voice_pe_manager
 
 
+def get_voice_pe_bridge():
+    """The running Voice PE WebAudio bridge, or ``None`` when disabled."""
+    return _global_voice_pe_bridge
+
+
 def voice_pe_health() -> dict:
     """Health snapshot for the diagnostics panel (empty when disabled)."""
     manager = _global_voice_pe_manager
@@ -1008,6 +1038,7 @@ def main(smoke_test: bool = False) -> None:
     global _global_dialogue_memory, _global_stop_requested, _global_tts_engine, _global_dictation_engine
     global _warm_profile_graph_listener, _global_proactive_service
     global _global_voice_pe_manager, _global_everywhere_broker
+    global _global_voice_pe_bridge, _global_control_plane, _global_v271_ingest
 
     # Reset stop flag at start (in case of restart)
     _global_stop_requested = False
@@ -1448,6 +1479,15 @@ def main(smoke_test: bool = False) -> None:
             _global_everywhere_broker.start()
             print("🪟 Everywhere broker started", flush=True)
             try:
+                from .everywhere.tdb_server import start_tdb
+
+                # The Voice PE manager powers the public voice-pe/v1 contract
+                # (detection stays in NAI OS; operation lives here).
+                if start_tdb(cfg, voice_pe=_global_voice_pe_manager) is not None:
+                    print("📺 Toaster Desktop Bridge started", flush=True)
+            except Exception as tdb_exc:
+                debug_log(f"tdb start failed (non-fatal): {tdb_exc}", "cast")
+            try:
                 from .everywhere.video_server import start_video_server
                 if start_video_server(cfg) is not None:
                     print("🎬 Video player server started", flush=True)
@@ -1466,6 +1506,63 @@ def main(smoke_test: bool = False) -> None:
         debug_log(f"everywhere broker init failed (non-fatal): {e}", "everywhere")
         print(f"  ⚠ Everywhere not available: {e}", flush=True)
 
+    # Desktop control plane (control_plane.spec.md): the local loopback
+    # plane the paired v271.cz browser talks to. Toastovač is the local
+    # control plane — pairing, browser sessions, app/MCP registries, tool
+    # execution and voice routing live here.
+    try:
+        if bool(getattr(cfg, "control_plane_enabled", True)):
+            from .control_plane.service import ControlPlane
+
+            _global_control_plane = ControlPlane(cfg)
+            # The browser can ask Toastovač to speak (P0 step 11: concise
+            # spoken result) and the voice path speaks dispatch confirmations.
+            _global_control_plane.speak = (
+                tts.speak if tts is not None and tts.enabled else None
+            )
+            _global_control_plane.start()
+            _cp_port = _global_control_plane.transport.port or getattr(
+                cfg, "control_plane_port", 27121
+            )
+            print(
+                f"🕹️ Control plane: http://{getattr(cfg, 'control_plane_host', '127.0.0.1')}:{_cp_port}",
+                flush=True,
+            )
+        else:
+            print("🕹️ Control plane disabled", flush=True)
+    except Exception as e:
+        _global_control_plane = None
+        debug_log(f"control plane init failed (non-fatal): {e}", "control_plane")
+        print(f"  ⚠ Control plane not available: {e}", flush=True)
+
+    # V271 meeting graph ingestion (v271_ingest.spec.md): durable job
+    # store + worker for the coach's canonical meeting records.
+    try:
+        if bool(getattr(cfg, "v271_ingest_enabled", True)):
+            from .v271_ingest.coordinator import V271IngestCoordinator
+            from .v271_ingest.client import V271ApiClient
+            from .v271_ingest.store import MeetingIngestStore
+
+            _global_v271_ingest = V271IngestCoordinator(
+                MeetingIngestStore(db),
+                owner_user_id=getattr(cfg, "v271_owner_user_id", "") or None,
+            )
+            _token = str(getattr(cfg, "v271_api_token", "") or "").strip()
+            if _token:
+                _global_v271_ingest.set_client(V271ApiClient(
+                    getattr(cfg, "v271_api_base_url", "https://v271.cz/api/v1"),
+                    _token,
+                    timeout_sec=getattr(cfg, "v271_ingest_timeout_sec", 60.0),
+                ))
+            _global_v271_ingest.start()
+            print("🗂️ V271 meeting ingestion started", flush=True)
+        else:
+            print("🗂️ V271 meeting ingestion disabled", flush=True)
+    except Exception as e:
+        _global_v271_ingest = None
+        debug_log(f"v271 ingest init failed (non-fatal): {e}", "v271_ingest")
+        print(f"  ⚠ V271 meeting ingestion not available: {e}", flush=True)
+
     if smoke_test:
         print("SMOKE_TEST_INIT_OK", flush=True)
         debug_log("smoke test: all components initialised successfully", "jarvis")
@@ -1478,6 +1575,23 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
             _global_everywhere_broker = None
+        try:
+            from .everywhere.tdb_server import stop_tdb
+            stop_tdb()
+        except Exception:
+            pass
+        if _global_control_plane is not None:
+            try:
+                _global_control_plane.stop()
+            except Exception:
+                pass
+            _global_control_plane = None
+        if _global_v271_ingest is not None:
+            try:
+                _global_v271_ingest.stop()
+            except Exception:
+                pass
+            _global_v271_ingest = None
         _stop_everywhere_host_watchdog()
         global _global_everywhere_host_proc
         if _global_everywhere_host_proc is not None:
@@ -1502,6 +1616,13 @@ def main(smoke_test: bool = False) -> None:
             except Exception:
                 pass
             _global_voice_pe_manager = None
+
+        if _global_voice_pe_bridge is not None:
+            try:
+                _global_voice_pe_bridge.stop()
+            except Exception:
+                pass
+            _global_voice_pe_bridge = None
 
         try:
             from .output.virtual_microphone import stop_publisher
@@ -1698,6 +1819,27 @@ def main(smoke_test: bool = False) -> None:
             stop_video_server()
         except Exception:
             pass
+        try:
+            from .everywhere.tdb_server import stop_tdb
+            stop_tdb()
+        except Exception:
+            pass
+        # Stop the control plane first: its HTTP/SSE threads are daemon
+        # threads and must not outlive the registries they read.
+        if _global_control_plane is not None:
+            try:
+                _global_control_plane.stop()
+            except Exception:
+                pass
+            _global_control_plane = None
+            debug_log("control plane stopped", "control_plane")
+        if _global_v271_ingest is not None:
+            try:
+                _global_v271_ingest.stop()
+            except Exception:
+                pass
+            _global_v271_ingest = None
+            debug_log("v271 ingest stopped", "v271_ingest")
         # Stop the native Everywhere host process we spawned.
         _stop_everywhere_host_watchdog()
         if _global_everywhere_host_proc is not None:
@@ -1725,6 +1867,15 @@ def main(smoke_test: bool = False) -> None:
                 debug_log(f"voice_pe shutdown error: {_e}", "jarvis")
             _global_voice_pe_manager = None
             debug_log("voice_pe manager stopped", "jarvis")
+
+        if _global_voice_pe_bridge is not None:
+            debug_log("stopping voice_pe_bridge...", "jarvis")
+            try:
+                _global_voice_pe_bridge.stop()
+            except Exception as _e:
+                debug_log(f"voice_pe_bridge shutdown error: {_e}", "jarvis")
+            _global_voice_pe_bridge = None
+            debug_log("voice_pe_bridge stopped", "jarvis")
 
         if voice_thread is not None:
             debug_log("stopping voice thread...", "jarvis")

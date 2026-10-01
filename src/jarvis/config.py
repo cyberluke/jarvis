@@ -837,6 +837,30 @@ class Settings:
     voice_pe_bridge_buffer_frames: int
     voice_pe_bridge_device: str
 
+    # Desktop control plane (v271-local/1; control_plane.spec.md). Toastovač
+    # is the local control plane for the paired v271.cz browser: pairing,
+    # browser sessions, the app runtime registry, the MCP lifecycle, tool
+    # execution and voice routing.
+    control_plane_enabled: bool
+    control_plane_host: str
+    control_plane_port: int
+    control_plane_allowed_origins: list[str]
+    control_plane_session_ttl_sec: float
+    control_plane_continuity_ttl_sec: float
+    control_plane_pairing_store: str
+    control_plane_apps: list[dict]
+    control_plane_voice_routing: bool
+    control_plane_dangerous_tool_patterns: list[str]
+
+    # V271 meeting graph ingestion (v271_ingest.spec.md): durable job store
+    # + worker for the coach's canonical meeting records.
+    v271_ingest_enabled: bool
+    v271_api_base_url: str
+    v271_api_token: str
+    v271_owner_user_id: str
+    v271_source_device: str
+    v271_ingest_timeout_sec: float
+
     # Voice PE audio pipeline (see integrations/voice_pe/audio_pipeline.spec.md):
     # one typed settings model shared by UI, runtime, calibration and
     # diagnostics. ``voice_pe_profile`` is the active profile (auto/desk/
@@ -1606,6 +1630,37 @@ def get_default_config() -> Dict[str, Any]:
         "voice_pe_bridge_max_clients": 1,
         "voice_pe_bridge_buffer_frames": 200,
         "voice_pe_bridge_device": "",
+        # Desktop control plane (v271-local/1; control_plane.spec.md).
+        "control_plane_enabled": True,
+        "control_plane_host": "127.0.0.1",
+        "control_plane_port": 27121,
+        # Explicit browser origins only; there is no wildcard CORS.
+        "control_plane_allowed_origins": ["https://v271.cz"],
+        # A tab whose registration is older than this is treated as gone.
+        "control_plane_session_ttl_sec": 120.0,
+        # A voice follow-up reuses the last routed target within this window.
+        "control_plane_continuity_ttl_sec": 600.0,
+        # Pairing store path; empty = next to the daemon config file.
+        "control_plane_pairing_store": "",
+        # Runtime metadata per local app (NAI OS owns install metadata).
+        "control_plane_apps": [],
+        # Route voice utterances to the paired v271 browser; false = local
+        # engine only.
+        "control_plane_voice_routing": True,
+        # Regexes that mark a tool as dangerous in capability metadata.
+        "control_plane_dangerous_tool_patterns": [
+            "exec", "shell", "bash", "cmd", "powershell", "command",
+            "kill", "shutdown", "reboot", "format", "delete", "remove",
+            "drop", "truncate", "rm ", "rmdir", "del ",
+        ],
+        # V271 meeting graph ingestion (v271_ingest.spec.md). The token is
+        # the signed-in V271 identity; it may also come from V271_API_TOKEN.
+        "v271_ingest_enabled": True,
+        "v271_api_base_url": "https://v271.cz/api/v1",
+        "v271_api_token": "",
+        "v271_owner_user_id": "",
+        "v271_source_device": "",
+        "v271_ingest_timeout_sec": 60.0,
         # Audio pipeline: profile + speech-aware normalizer (see the spec).
         "voice_pe_profile": "auto",
         "voice_pe_normalizer_enabled": False,
@@ -2120,6 +2175,82 @@ def load_settings() -> Settings:
     except (TypeError, ValueError):
         voice_pe_bridge_buffer_frames = 200
     voice_pe_bridge_device = str(merged.get("voice_pe_bridge_device", "") or "").strip()
+    # Desktop control plane (v271-local/1; control_plane.spec.md).
+    control_plane_enabled = bool(merged.get("control_plane_enabled", True))
+    control_plane_host = str(
+        merged.get("control_plane_host", "127.0.0.1") or "127.0.0.1"
+    ).strip()
+    if not control_plane_host:
+        control_plane_host = "127.0.0.1"
+    try:
+        control_plane_port = int(merged.get("control_plane_port", 27121) or 27121)
+    except (TypeError, ValueError):
+        control_plane_port = 27121
+    if control_plane_port <= 0 or control_plane_port > 65535:
+        control_plane_port = 27121
+    raw_origins = merged.get("control_plane_allowed_origins")
+    control_plane_allowed_origins = (
+        [str(o) for o in raw_origins if isinstance(o, str) and o.strip()]
+        if isinstance(raw_origins, list)
+        else ["https://v271.cz"]
+    )
+    try:
+        control_plane_session_ttl_sec = float(
+            merged.get("control_plane_session_ttl_sec", 120.0) or 120.0
+        )
+    except (TypeError, ValueError):
+        control_plane_session_ttl_sec = 120.0
+    if control_plane_session_ttl_sec <= 0:
+        control_plane_session_ttl_sec = 120.0
+    try:
+        control_plane_continuity_ttl_sec = float(
+            merged.get("control_plane_continuity_ttl_sec", 600.0) or 600.0
+        )
+    except (TypeError, ValueError):
+        control_plane_continuity_ttl_sec = 600.0
+    if control_plane_continuity_ttl_sec <= 0:
+        control_plane_continuity_ttl_sec = 600.0
+    control_plane_pairing_store = str(
+        merged.get("control_plane_pairing_store", "") or ""
+    ).strip()
+    raw_apps = merged.get("control_plane_apps")
+    control_plane_apps = (
+        [a for a in raw_apps if isinstance(a, dict)]
+        if isinstance(raw_apps, list)
+        else []
+    )
+    control_plane_voice_routing = bool(
+        merged.get("control_plane_voice_routing", True)
+    )
+    raw_dangerous = merged.get("control_plane_dangerous_tool_patterns")
+    control_plane_dangerous_tool_patterns = (
+        [str(p) for p in raw_dangerous if isinstance(p, str) and p.strip()]
+        if isinstance(raw_dangerous, list)
+        else []
+    )
+
+    # V271 meeting graph ingestion (v271_ingest.spec.md).
+    v271_ingest_enabled = bool(merged.get("v271_ingest_enabled", True))
+    v271_api_base_url = str(
+        merged.get("v271_api_base_url", "https://v271.cz/api/v1")
+        or "https://v271.cz/api/v1"
+    ).strip().rstrip("/")
+    if not v271_api_base_url:
+        v271_api_base_url = "https://v271.cz/api/v1"
+    # The token also honours V271_API_TOKEN; the config file wins.
+    v271_api_token = str(merged.get("v271_api_token", "") or "").strip()
+    if not v271_api_token:
+        v271_api_token = str(os.environ.get("V271_API_TOKEN", "") or "").strip()
+    v271_owner_user_id = str(merged.get("v271_owner_user_id", "") or "").strip()
+    v271_source_device = str(merged.get("v271_source_device", "") or "").strip()
+    try:
+        v271_ingest_timeout_sec = float(
+            merged.get("v271_ingest_timeout_sec", 60.0) or 60.0
+        )
+    except (TypeError, ValueError):
+        v271_ingest_timeout_sec = 60.0
+    if v271_ingest_timeout_sec <= 0:
+        v271_ingest_timeout_sec = 60.0
     # Audio pipeline: profile + speech-aware normalizer (audio_pipeline.spec.md).
     voice_pe_profile = str(merged.get("voice_pe_profile", "auto") or "auto").strip().lower()
     if voice_pe_profile not in ("auto", "desk", "room", "far_field", "meeting"):
@@ -2638,6 +2769,22 @@ voice_pe_no_audio_warn_s=voice_pe_no_audio_warn_s,
         voice_pe_bridge_max_clients=voice_pe_bridge_max_clients,
         voice_pe_bridge_buffer_frames=voice_pe_bridge_buffer_frames,
         voice_pe_bridge_device=voice_pe_bridge_device,
+        control_plane_enabled=control_plane_enabled,
+        control_plane_host=control_plane_host,
+        control_plane_port=control_plane_port,
+        control_plane_allowed_origins=control_plane_allowed_origins,
+        control_plane_session_ttl_sec=control_plane_session_ttl_sec,
+        control_plane_continuity_ttl_sec=control_plane_continuity_ttl_sec,
+        control_plane_pairing_store=control_plane_pairing_store,
+        control_plane_apps=control_plane_apps,
+        control_plane_voice_routing=control_plane_voice_routing,
+        control_plane_dangerous_tool_patterns=control_plane_dangerous_tool_patterns,
+        v271_ingest_enabled=v271_ingest_enabled,
+        v271_api_base_url=v271_api_base_url,
+        v271_api_token=v271_api_token,
+        v271_owner_user_id=v271_owner_user_id,
+        v271_source_device=v271_source_device,
+        v271_ingest_timeout_sec=v271_ingest_timeout_sec,
         voice_pe_profile=voice_pe_profile,
         voice_pe_normalizer_enabled=voice_pe_normalizer_enabled,
         voice_pe_normalizer_target_db=voice_pe_normalizer_target_db,

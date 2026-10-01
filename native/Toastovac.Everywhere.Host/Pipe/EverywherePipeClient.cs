@@ -77,14 +77,38 @@ public sealed class EverywherePipeClient
         if (_running) return;
         _running = true;
         LastPongTick = Environment.TickCount64;
-        _ = Task.Run(ConnectLoop);
-        _ = Task.Run(HealthWatchLoop);
-        _ = Task.Run(WriteLoop);
+        // Dedicated threads, NOT the thread pool: a starved pool (the WinUI
+        // host blocks pool threads on UIA/OCR/dispatcher work) would leave
+        // the write loop unscheduled and silently wedge the whole pipe
+        // session — the broker never sees pings, options or start commands,
+        // and every overlay round-trip times out while the host looks fine.
+        StartLoop(ConnectLoop, "pipe-connect");
+        StartLoop(HealthWatchLoop, "pipe-health");
+        StartLoop(WriteLoop, "pipe-write");
         // Backstop: if the pipe session goes completely quiet (a frozen host
-        // stalls even the health watch), a separate thread cancels the pending
-        // I/O and terminates the process. The daemon watchdog respawns a fresh
+        // stalls even the health watch), this thread cancels the pending I/O
+        // and terminates the process. The daemon watchdog respawns a fresh
         // host, which connects with a clean session — no app restart needed.
-        _ = Task.Run(SelfWatchdogLoop);
+        StartLoop(SelfWatchdogLoop, "pipe-watchdog");
+    }
+
+    private static void StartLoop(Action loop, string name)
+    {
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                loop();
+            }
+            catch (Exception ex)
+            {
+                EverywhereApp.Log(
+                    $"pipe loop {name} faulted: {ex.GetType().Name}: "
+                    + ex.Message);
+            }
+        })
+        { IsBackground = true, Name = name };
+        thread.Start();
     }
 
     /// <summary>Dedicated writer: the only thread that ever calls WriteFile.
@@ -115,7 +139,7 @@ public sealed class EverywherePipeClient
             {
                 continue;
             }
-            if (!WriteFile(handle, frame, (uint)frame.Length, out _,
+if (!WriteFile(handle, frame, (uint)frame.Length, out _,
                     IntPtr.Zero))
             {
                 var err = Marshal.GetLastWin32Error();
@@ -385,9 +409,34 @@ public sealed class EverywherePipeClient
             {
                 return;
             }
+            // NEVER leave a long-pending ReadFile on this handle: on a
+            // message-mode pipe a pending read blocks the concurrent writer
+            // thread (the WriteLoop) — the observed wedge that made every
+            // host round-trip time out while the broker waited forever.
+            // Peek first; only call ReadFile when a complete frame is known
+            // to be waiting, so reads are always brief.
+            uint avail = 0;
+            uint peekRead = 0;
+            uint peekLeft = 0;
+            if (!PeekNamedPipe(handle, null, 0, out peekRead, out avail,
+                    out peekLeft))
+            {
+                EverywhereApp.Log(
+                    $"pipe peek failed handle=0x{handle.ToInt64():x} "
+                    + $"err={Marshal.GetLastWin32Error()}");
+                return;  // pipe gone
+            }
+            if (avail < Framing.FrameHeaderBytes)
+            {
+                Thread.Sleep(5);
+                continue;
+            }
             if (!ReadFile(handle, buf, (uint)buf.Length, out uint got,
                     IntPtr.Zero) || got < Framing.FrameHeaderBytes)
             {
+                EverywhereApp.Log(
+                    $"pipe read: failed handle=0x{handle.ToInt64():x} "
+                    + $"err={Marshal.GetLastWin32Error()} got={got}");
                 return;  // pipe gone
             }
             LastPongTick = Environment.TickCount64;
@@ -469,6 +518,11 @@ public sealed class EverywherePipeClient
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool ReadFile(IntPtr handle, byte[] buffer,
         uint bytesToRead, out uint bytesRead, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool PeekNamedPipe(IntPtr handle, byte[]? buffer,
+        uint bufferSize, out uint bytesRead, out uint totalBytesAvail,
+        out uint bytesLeftThisMessage);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr handle);

@@ -70,6 +70,10 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
             "jarvis voice-pe media-state <device>",
             "jarvis voice-pe stop <device>",
             "jarvis voice-pe forget <device>",
+            "jarvis voice-pe profile <device> <auto|desk|room|far_field|meeting>",
+            "jarvis voice-pe audio-settings <device>",
+            "jarvis voice-pe diag <device>",
+            "jarvis voice-pe calibrate <device> [--profile NAME] [--timeout-s N]",
         ):
             print(f"  ▫️ {line}", flush=True)
         return 0
@@ -216,6 +220,158 @@ def handle(argv: list[str], settings: Any, manager: Any = None) -> int:
         print("   ▫️ The device itself keeps its firmware and Noise key", flush=True)
         return 0
 
+    if command == "profile":
+        if manager is None:
+            print("🛰️ voice-pe profile needs the running daemon", flush=True)
+            return 1
+        key = rest[0] if rest else ""
+        wanted = rest[1] if len(rest) > 1 else ""
+        if not wanted:
+            # Read: show the resolved profile + effective settings.
+            view = manager.audio_settings_view(key)
+            if "error" in view:
+                print(f"🛰️ No attached device: {view['error']}", flush=True)
+                return 1
+            print(
+                f"🎛️ Profile: {view['profile']} "
+                f"({view['device']['name'] or view['deviceId']})",
+                flush=True,
+            )
+            for row in view["settings"].get("settings", []):
+                state = "🚫 " + str(row.get("reason")) if row.get("state") == "unsupported" else "✅"
+                print(
+                    f"   {state} {row['label']}: {row['value']} {row.get('unit') or ''}"
+                    f"  [{row['layer']}]",
+                    flush=True,
+                )
+            return 0
+        result = manager.set_profile(key, wanted)
+        if not result.get("applied"):
+            print(f"🛰️ profile switch failed: {result.get('error', '?')}", flush=True)
+            return 1
+        print(
+            f"🎛️ Profile → {result['profile']} on {result['deviceId']} "
+            f"(persisted={result.get('persisted', False)})",
+            flush=True,
+        )
+        for reason in (result.get("unsupported") or {}).values():
+            print(f"   🚫 unsupported: {reason}", flush=True)
+        return 0
+
+    if command == "audio-settings":
+        if manager is None:
+            print("🛰️ voice-pe audio-settings needs the running daemon", flush=True)
+            return 1
+        view = manager.audio_settings_view(rest[0] if rest else "")
+        if "error" in view:
+            print(f"🛰️ No attached device: {view['error']}", flush=True)
+            return 1
+        print(
+            f"🎚️ {view['device']['name'] or view['deviceId']} "
+            f"(profile {view['profile']})",
+            flush=True,
+        )
+        for row in view["settings"].get("settings", []):
+            state = "🚫 " + str(row.get("reason")) if row.get("state") == "unsupported" else "✅"
+            print(
+                f"   {state} {row['label']}: {row['value']} {row.get('unit') or ''}"
+                f"  [{row['layer']}]",
+                flush=True,
+            )
+        device = view.get("device_audio_settings") or {}
+        for name, label in (
+            ("noise_suppression_level", "Device noise suppression"),
+            ("auto_gain", "Device auto gain"),
+            ("volume_multiplier", "Device volume multiplier"),
+        ):
+            row = device.get(name) or {}
+            print(
+                f"   📡 {label}: {row.get('display', 'not reported')} "
+                f"(device-controlled, read-only)",
+                flush=True,
+            )
+        return 0
+
+    if command == "diag":
+        if manager is None:
+            print("🛰️ voice-pe diag needs the running daemon", flush=True)
+            return 1
+        result = manager.diag(rest[0] if rest else "")
+        if "error" in result:
+            print(f"🛰️ No attached device: {result['error']}", flush=True)
+            return 1
+        print(f"📊 Diagnostics: {result['deviceId']} (profile {result['profile']})", flush=True)
+        diag = result.get("diagnostics") or {}
+        print("   🎙️ Input", flush=True)
+        for name, label in (
+            ("input_rms_db", "RMS"),
+            ("input_peak_db", "peak"),
+            ("noise_floor_db", "noise floor"),
+            ("snr_db", "SNR"),
+        ):
+            value = diag.get(name)
+            print(f"      ▫️ {label}: {value if value is not None else '-'} dB", flush=True)
+        print(f"      ▫️ queue depth: {diag.get('queue_depth_ms')} ms", flush=True)
+        print(f"      ▫️ dropped frames: {diag.get('dropped_chunks')}", flush=True)
+        aec = diag.get("aec") or {}
+        print(f"   🔄 AEC: {aec.get('aec_state', '-')} "
+              f"(reference {aec.get('reference_active', '-')})", flush=True)
+        normalizer = diag.get("normalizer") or {}
+        if normalizer:
+            print(
+                f"   🎛️ Normalizer: enabled={normalizer.get('enabled')} "
+                f"gain={normalizer.get('gain_db')} dB "
+                f"floor={normalizer.get('noise_floor_db')} dB "
+                f"clipping={normalizer.get('clipping_ratio')}",
+                flush=True,
+            )
+        return 0
+
+    if command == "calibrate":
+        if manager is None:
+            print("🛰️ voice-pe calibrate needs the running daemon", flush=True)
+            return 1
+        key = rest[0] if rest else ""
+        profile = _flag(rest, "--profile") or None
+        timeout = _flag(rest, "--timeout-s")
+        try:
+            timeout_s = float(timeout) if timeout else 120.0
+        except (TypeError, ValueError):
+            timeout_s = 120.0
+        print("🎙️ Starting Voice PE auto-calibration (5 steps)", flush=True)
+        result = _run_coro(
+            manager,
+            manager.calibrate(key, profile, timeout_s=timeout_s, window_s=5.0),
+        )
+        if not isinstance(result, dict) or "error" in result:
+            reason = result.get("error") if isinstance(result, dict) else "?"
+            print(f"🛰️ calibration failed: {reason}", flush=True)
+            return 1
+        measurements = result.get("measurements") or {}
+        print("   📏 Measurements", flush=True)
+        for name, label in (
+            ("noise_floor_db", "noise floor"),
+            ("speech_rms_db", "speech RMS"),
+            ("snr_db", "SNR"),
+            ("far_rms_db", "far-field RMS"),
+            ("far_degradation_db", "far degradation"),
+            ("false_vad_rate", "false-VAD rate"),
+            ("whisper_avg_logprob", "Whisper avg_logprob"),
+            ("echo_leakage_db", "echo leakage"),
+        ):
+            value = measurements.get(name)
+            if value is not None:
+                print(f"      ▫️ {label}: {value}", flush=True)
+        print("   🎛️ Tuned settings", flush=True)
+        for key_name, value in (result.get("tuned") or {}).items():
+            print(f"      ▫️ {key_name}: {value}", flush=True)
+        print(
+            f"   💾 Saved for {result.get('mac', '?')} (profile "
+            f"{result.get('profile', '?')})",
+            flush=True,
+        )
+        return 0
+
     print(f"❓ Unknown voice-pe subcommand: {command}", flush=True)
     return 1
 
@@ -294,6 +450,22 @@ def _pair(cfg: VoicePEConfig) -> int:
         return 0 if enabled else 1
 
     return asyncio.run(_run())
+
+
+def _run_coro(manager, coro):
+    """Run one async manager call and return its raw result (or ``None``).
+
+    The daemon-bundled manager owns a loop thread; a transient manager runs
+    the coroutine directly. Errors print and map to ``None``.
+    """
+    loop = getattr(manager, "_loop", None)
+    try:
+        if loop is not None:
+            return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=180.0)
+        return asyncio.run(coro)
+    except Exception as err:
+        print(f"⚠️  voice-pe: {err}", flush=True)
+        return None
 
 
 def _await(manager, coro) -> int:

@@ -58,10 +58,6 @@ class _UIABridge:
         if self._ready:
             return
         try:
-            from ctypes.wintypes import HRESULT  # noqa: F401  (presence probe)
-        except Exception:
-            pass
-        try:
             ole32 = ctypes.windll.ole32
             ctypes.windll.LoadLibrary("UIAutomationCore.dll")
             clsid = _to_guid(_CLSID_CUIA)

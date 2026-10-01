@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -213,6 +214,29 @@ class VoicePEManager:
         self._metrics: dict = {}
         #: Set once ``_astart`` finished, so ``start()`` is not a half-answer.
         self._start_done = threading.Event()
+        #: Pristine profile-scoped base values (see ``_base_settings_dict``);
+        #: profile application mutates the live settings, so the base must
+        #: never be read back from them.
+        self._base_profile_values = self._capture_base_profile_values(settings)
+
+    @staticmethod
+    def _capture_base_profile_values(settings: Any) -> dict:
+        mapping = {
+            "vad_aggressiveness": ("vad_aggressiveness", 2),
+            "vad_pre_roll_ms": ("vad_pre_roll_ms", 240),
+            "whisper_post_roll_ms": ("whisper_post_roll_ms", 400),
+            "whisper_min_avg_logprob": ("whisper_min_avg_logprob", -0.7),
+            "whisper_no_speech_threshold": ("whisper_no_speech_threshold", 0.5),
+            "normalizer_enabled": ("voice_pe_normalizer_enabled", False),
+            "normalizer_target_db": ("voice_pe_normalizer_target_db", -28.0),
+            "normalizer_max_gain_db": ("voice_pe_normalizer_max_gain_db", 9.0),
+            "normalizer_attack_db_per_s": ("voice_pe_normalizer_attack_db_per_s", 3.0),
+            "normalizer_limiter_db": ("voice_pe_normalizer_limiter_db", -1.0),
+        }
+        out = {}
+        for key, (attr, default) in mapping.items():
+            out[key] = getattr(settings, attr, default)
+        return out
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -221,6 +245,28 @@ class VoicePEManager:
     @property
     def enabled(self) -> bool:
         return bool(self.config.enabled)
+
+    def apply_wake_word_setting(self, disable_wake_words: bool) -> None:
+        """Apply Settings → Deactivate Wake Words without a daemon restart."""
+        continuous = not bool(disable_wake_words)
+        self.config.disable_wake_words = not continuous
+        try:
+            self.settings.voice_pe_disable_wake_words = not continuous
+        except Exception:
+            pass
+        _persist_listening_mode(continuous)
+        for device in list(self._devices):
+            try:
+                device.set_listening_mode(continuous)
+            except Exception as exc:
+                debug_log(
+                    f"voice_pe: apply wake-word setting failed: {exc}",
+                    "voice",
+                )
+        debug_log(
+            f"component=voice_pe event=wake_words_applied disable={not continuous}",
+            "voice",
+        )
 
     def start(self, timeout_s: float = 12.0) -> bool:
         """Start the loop thread and wait for the device list.
@@ -456,6 +502,31 @@ class VoicePEManager:
     def devices(self) -> list[VoicePEDevice]:
         return list(self._devices)
 
+    def attach_audio_sink(self, sink, key: str = "") -> bool:
+        """Attach one tap to the resolved device's microphone ingress.
+
+        ``key`` follows the ``device()`` resolution rules (name, friendly name,
+        MAC, host); an empty key picks the single attached satellite. The tap is
+        the bridge's ``VoicePEFrameTap`` or any object with ``on_frame`` /
+        ``on_stream_start`` / ``on_stream_end`` callbacks. Returns False when no
+        device (or no connection) exists yet, so callers can retry.
+        """
+        device = self.device(key)
+        ingress = getattr(device, "audio_ingress", None)
+        if ingress is None:
+            return False
+        ingress.attach_sink(sink)
+        return True
+
+    def detach_audio_sink(self, sink, key: str = "") -> bool:
+        """Detach one tap from the resolved device's microphone ingress."""
+        device = self.device(key)
+        ingress = getattr(device, "audio_ingress", None)
+        if ingress is None:
+            return False
+        ingress.detach_sink(sink)
+        return True
+
     def device(self, key: str) -> Optional[VoicePEDevice]:
         """Find one device by node name, friendly name or MAC address.
 
@@ -644,6 +715,227 @@ class VoicePEManager:
         if applied:
             _persist_listening_mode(continuous)
         return applied
+
+    # ------------------------------------------------------------------
+    # Audio pipeline: profiles, meeting mode, calibration, diagnostics
+    # (see audio_pipeline.spec.md)
+    # ------------------------------------------------------------------
+
+    def _base_settings_dict(self) -> dict:
+        """Pristine base config values for every profile-scoped metadata key.
+
+        Captured at construction: profile application mutates the live
+        settings (listener/whisper knobs), so reading them back here would
+        leak the previous profile into the next one's ``AUTO`` base.
+        """
+        return dict(self._base_profile_values)
+
+    def _device_profile(self, device) -> str:
+        """Resolved profile: per-device metadata override > global > AUTO."""
+        from .audio_settings import normalize_profile_name
+
+        meta = (device.identity or {}).get("mac_address", "") or ""
+        stored = (self.config.devices.get(meta) or {}).get("profile", "")
+        if stored:
+            return normalize_profile_name(stored)
+        return normalize_profile_name(self.config.profile)
+
+    def apply_profile(self, key: str = "", profile: Optional[str] = None) -> dict:
+        """Apply the active (or given) profile to one device's pipeline.
+
+        Resolves base config + profile preset + stored calibration overrides,
+        pushes the normalizer view into the device's ingress, mutates the
+        shared listener/whisper settings to the profile values and reports
+        every knob that a backend rejected as ``unsupported``.
+        """
+        from .audio_settings import (
+            normalize_profile_name,
+            resolve_audio_settings,
+        )
+
+        device = self.device(key)
+        if device is None:
+            return {"applied": False, "error": "no_device"}
+        profile = (
+            normalize_profile_name(profile) if profile is not None
+            else self._device_profile(device)
+        )
+        mac = (device.identity or {}).get("mac_address", "") or ""
+        calibration = dict(self.config.calibrations.get(mac) or {})
+        settings = resolve_audio_settings(
+            self._base_settings_dict(), profile=profile, calibration=calibration
+        )
+        device.apply_audio_profile(settings)
+        unsupported: dict = {}
+        values = settings.values
+
+        # Listener knobs: the shared settings object is the runtime source.
+        for attr, value in (
+            ("vad_aggressiveness", values["vad_aggressiveness"]),
+            ("vad_pre_roll_ms", values["vad_pre_roll_ms"]),
+            ("whisper_post_roll_ms", values["whisper_post_roll_ms"]),
+            ("whisper_min_avg_logprob", values["whisper_min_avg_logprob"]),
+            ("whisper_no_speech_threshold", values["whisper_no_speech_threshold"]),
+        ):
+            try:
+                setattr(self.settings, attr, value)
+            except Exception:  # pragma: no cover - frozen settings object
+                unsupported[attr] = "settings object rejected the write"
+        if self._listener is not None:
+            setter = getattr(self._listener, "set_vad_aggressiveness", None)
+            if callable(setter):
+                try:
+                    if not setter(int(values["vad_aggressiveness"])):
+                        unsupported["vad_aggressiveness"] = "WebRTC VAD unavailable"
+                except Exception as exc:  # pragma: no cover
+                    unsupported["vad_aggressiveness"] = f"VAD rebuild failed: {exc}"
+            else:  # pragma: no cover - stubbed listener
+                unsupported["vad_aggressiveness"] = "listener has no VAD setter"
+        settings.unsupported.update(unsupported)
+        device.audio_settings_view = settings
+        debug_log(
+            f"component=voice_pe event=profile_applied device={device.device_id} "
+            f"profile={profile} unsupported={len(unsupported)}",
+            "voice_pe_audio",
+        )
+        return {
+            "applied": True,
+            "profile": profile,
+            "deviceId": device.device_id,
+            "source": settings.source,
+            "unsupported": unsupported,
+            "view": settings.view(),
+        }
+
+    def set_profile(self, key: str, profile: str) -> dict:
+        """Persist one device's profile (device metadata) and apply it."""
+        from .audio_settings import normalize_profile_name, PROFILES
+
+        device = self.device(key)
+        if device is None:
+            return {"applied": False, "error": "no_device"}
+        profile = normalize_profile_name(profile)
+        mac = (device.identity or {}).get("mac_address", "") or ""
+        if mac:
+            try:
+                from . import config as pe_config
+
+                pe_config.save_device_metadata(mac, {"profile": profile})
+            except Exception as exc:  # pragma: no cover - config write failure
+                return {"applied": False, "error": f"persist failed: {exc}"}
+            # Reflect the change in the live config so profile resolution
+            # works immediately, not only after a restart.
+            self.config.devices[mac] = dict(self.config.devices.get(mac) or {})
+            self.config.devices[mac]["profile"] = profile
+        result = self.apply_profile(device.device_id, profile=profile)
+        result["persisted"] = bool(mac)
+        result["profiles"] = list(PROFILES)
+        return result
+
+    def set_meeting_mode(self, active: bool) -> dict:
+        """Switch every device between MEETING and its configured profile.
+
+        The meeting scribe (coach) calls this while a meeting session runs:
+        the profile table keeps the voice assistant and the scribe apart
+        instead of forcing one compromise preset.
+        """
+        from .audio_settings import PROFILE_MEETING
+
+        results = []
+        for device in list(self._devices):
+            if active:
+                results.append(self.apply_profile(device.device_id, PROFILE_MEETING))
+            else:
+                results.append(self.apply_profile(device.device_id))
+        debug_log(
+            f"component=voice_pe event=meeting_mode active={active} "
+            f"devices={len(results)}",
+            "voice_pe_audio",
+        )
+        return {"meeting_mode": bool(active), "devices": results}
+
+    def audio_settings_view(self, key: str = "") -> dict:
+        """Effective settings + device-reported DSP + profile of one device."""
+        device = self.device(key)
+        if device is None:
+            return {"error": "no_device"}
+        applied = self.apply_profile(device.device_id)
+        return {
+            "deviceId": device.device_id,
+            "device": {
+                "name": (device.identity or {}).get("node_name", ""),
+                "mac": (device.identity or {}).get("mac_address", ""),
+            },
+            "profile": applied.get("profile"),
+            "settings": applied.get("view", {}),
+            "device_audio_settings": dict(device.device_audio_settings),
+            "calibration": dict(
+                self.config.calibrations.get(
+                    (device.identity or {}).get("mac_address", ""), {}
+                )
+            ),
+        }
+
+    async def calibrate(
+        self,
+        key: str = "",
+        profile: Optional[str] = None,
+        *,
+        timeout_s: float = 120.0,
+        window_s: float = 5.0,
+        prompt=None,
+    ) -> dict:
+        """Run the five-step auto-calibration wizard on one device.
+
+        Measures silence/speech/far-field/echo, tunes conservative settings,
+        persists the evidence and applies the tuned settings to the active
+        profile of the device.
+        """
+        from .audio_settings import normalize_profile_name
+        from .calibration import CalibrationWizard
+        from . import config as pe_config
+
+        device = self.device(key)
+        if device is None:
+            return {"error": "no_device"}
+        mac = (device.identity or {}).get("mac_address", "") or ""
+        profile = normalize_profile_name(profile) if profile is not None else None
+        wizard = CalibrationWizard(
+            self, device, window_s=window_s, prompt=prompt
+        )
+        result = await wizard.run(timeout_s=timeout_s)
+        tuned = result["tuned"]
+        measurements = result["measurements"]
+        evidence = {
+            "profile": profile or self._device_profile(device),
+            "measured_at": int(time.time()),
+            "measurements": measurements,
+            "tuned": tuned,
+        }
+        if mac:
+            pe_config.save_calibration(mac, evidence)
+            self.config.calibrations[mac] = evidence
+        self.apply_profile(device.device_id, profile=profile)
+        result["profile"] = evidence["profile"]
+        result["mac"] = mac
+        result["applied"] = True
+        return result
+
+    def diag(self, key: str = "") -> dict:
+        """Live diagnostics of one device (see audio_pipeline.spec.md)."""
+        device = self.device(key)
+        if device is None:
+            return {"error": "no_device"}
+        view = self.audio_settings_view(device.device_id)
+        snapshot = device.health_snapshot()
+        return {
+            "deviceId": device.device_id,
+            "profile": view.get("profile"),
+            "settings": view.get("settings"),
+            "device_audio_settings": view.get("device_audio_settings"),
+            "diagnostics": snapshot.get("diagnostics", {}),
+            "metrics": snapshot.get("metrics", {}),
+        }
 
 
 # ----------------------------------------------------------------------

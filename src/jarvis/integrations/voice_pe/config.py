@@ -51,6 +51,24 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
+def _as_dict(value: Any) -> Dict[str, Any]:
+    """Nested dict with a single coercion layer (device metadata etc.)."""
+    if isinstance(value, dict):
+        return dict(value)
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        try:
+            import json as _json
+
+            parsed = _json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
+
+
 #: Enum members of ``voice_pe_audio_channel``. Ordered, validated below.
 _AUDIO_CHANNEL_ENUM = ("enhanced", "raw", "auto")
 
@@ -265,6 +283,33 @@ def enable_integration(value: bool = True) -> bool:
     data = load_json(path)
     data["voice_pe_enabled"] = bool(value)
     return bool(save_json(path, data))
+
+
+def save_calibration(mac: str, payload: Dict[str, Any]) -> bool:
+    """Merge calibration evidence into ``voice_pe_calibrations``."""
+    if not mac:
+        return False
+    default_path, load_json, save_json = _config_io()
+    path = default_path()
+    data = load_json(path)
+    calibrations = data.get(CALIBRATIONS_KEY)
+    if not isinstance(calibrations, dict):
+        calibrations = {}
+    merged = dict(calibrations.get(mac) or {})
+    merged.update(payload)
+    calibrations[mac] = merged
+    data[CALIBRATIONS_KEY] = calibrations
+    return bool(save_json(path, data))
+
+
+def get_calibration(mac: str) -> Dict[str, Any]:
+    """Stored calibration evidence + tuned overrides of one device."""
+    default_path, load_json, _save = _config_io()
+    data = load_json(default_path()) or {}
+    calibrations = data.get(CALIBRATIONS_KEY)
+    if not isinstance(calibrations, dict):
+        return {}
+    return dict(calibrations.get(mac) or {})
 
 
 def forget_device(mac: str) -> bool:
